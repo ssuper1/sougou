@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="white">#FFFFFFFF</color>
+
+    <!-- Brand: lightened so it still reads on a dark page -->
+    <color name="accent">#FF4A9BEE</color>
+    <color name="accent_2">#FF6FB3F5</color>
+    <color name="accent_deep">#FF2E86DE</color>
+    <color name="accent_soft">#1F4A9BEE</color>
+
+    <color name="blue_light">#FF17324F</color>
+    <color name="blue_mid">#FF22456B</color>
+    <color name="blue_text">#FF8AB8F0</color>
+
+    <color name="page_bg">#FF101216</color>
+    <color name="card_bg">#FF1B1E24</color>
+    <color name="seg_bg">#FF23272E</color>
+
+    <color name="text_primary">#FFE6E8EC</color>
+    <color name="text_secondary">#FF9BA1AB</color>
+    <color name="text_tertiary">#FF6E747E</color>
+    <color name="divider">#FF2A2E36</color>
+
+    <color name="ok">#FF3FBF75</color>
+    <color name="danger">#FFE0645F</color>
+
+    <!-- Top bar: a plain dark app bar instead of a bright blue one -->
+    <color name="header_bg">#FF1B1E24</color>
+    <color name="header_text">#FFE6E8EC</color>
+    <color name="header_sub">#FF9BA1AB</color>
+    <color name="header_ctl_bg">#FF23272E</color>
+    <color name="header_ctl_text">#FF8AB8F0</color>
+</resources>

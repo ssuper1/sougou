@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="white">#FFFFFFFF</color>
+
+    <!-- Brand (与 superMi 同一套) -->
+    <color name="accent">#FF2E86DE</color>
+    <color name="accent_2">#FF56A6F5</color>
+    <color name="accent_deep">#FF1B5FB8</color>
+    <color name="accent_soft">#0A2E86DE</color>
+
+    <color name="blue_light">#FFE0EDFC</color>
+    <color name="blue_mid">#FFC9E2FA</color>
+    <color name="blue_text">#FF0F5BB5</color>
+
+    <color name="page_bg">#FFF4F5FA</color>
+    <color name="card_bg">#FFFFFFFF</color>
+    <color name="seg_bg">#FFF0F2F8</color>
+
+    <color name="text_primary">#FF1F2430</color>
+    <color name="text_secondary">#FF6B7280</color>
+    <color name="text_tertiary">#FF9CA3AF</color>
+    <color name="divider">#FFEEF0F6</color>
+
+    <color name="ok">#FF27AE60</color>
+    <color name="danger">#FFD64545</color>
+
+    <!-- Top bar (dark variants live in values-night) -->
+    <color name="header_bg">#FF2E86DE</color>
+    <color name="header_text">#FFFFFFFF</color>
+    <color name="header_sub">#FFDCEAFB</color>
+    <color name="header_ctl_bg">#FF1B5FB8</color>
+    <color name="header_ctl_text">#FFFFFFFF</color>
+</resources>
