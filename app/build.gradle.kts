@@ -14,8 +14,8 @@ android {
         applicationId = "com.qoder.sogousym"
         minSdk = 24
         targetSdk = 36
-        versionCode = 82
-        versionName = "0.81"
+        versionCode = 86
+        versionName = "0.85"
     }
 
     buildTypes {

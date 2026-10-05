@@ -10,6 +10,7 @@ import android.content.res.Configuration;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.provider.Settings;
 import android.text.Editable;
@@ -20,6 +21,7 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewOutlineProvider;
+import android.view.WindowInsets;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
 import android.widget.EditText;
@@ -91,7 +93,8 @@ public class MainActivity extends Activity {
         LinearLayout wrap = new LinearLayout(this);
         wrap.setOrientation(LinearLayout.VERTICAL);
         wrap.setBackgroundColor(c(R.color.page_bg));
-        wrap.addView(header());
+        final View topBar = header();
+        wrap.addView(topBar);
 
         LinearLayout content = new LinearLayout(this);
         content.setOrientation(LinearLayout.VERTICAL);
@@ -127,7 +130,30 @@ public class MainActivity extends Activity {
         sv.setBackgroundColor(c(R.color.page_bg));
         sv.setFillViewport(true);
         sv.addView(wrap);
+        final LinearLayout contentRef = content;
+        // Android 15+ forces edge-to-edge for apps targeting SDK 35+, so the app bar would sit under
+        // the status bar. Older releases hand the insets to the decor instead, which means this
+        // listener sees 0 there and adds nothing.
+        sv.setOnApplyWindowInsetsListener(new View.OnApplyWindowInsetsListener() {
+            @Override
+            public WindowInsets onApplyWindowInsets(View v, WindowInsets insets) {
+                int top;
+                int bottom;
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    android.graphics.Insets bars = insets.getInsets(WindowInsets.Type.systemBars());
+                    top = bars.top;
+                    bottom = bars.bottom;
+                } else {
+                    top = insets.getSystemWindowInsetTop();
+                    bottom = insets.getSystemWindowInsetBottom();
+                }
+                topBar.setPadding(dp(18), dp(12) + top, dp(14), dp(12));
+                contentRef.setPadding(0, dp(12), 0, dp(8) + bottom);
+                return insets;
+            }
+        });
         setContentView(sv);
+        sv.requestApplyInsets();
 
         checkRoot();
     }

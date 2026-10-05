@@ -12,6 +12,7 @@
 | 角标显示 | ✅ 自定义 + 空格 + 原符号，如 `§ ！`；**三种生效方式都这样显示**（`setSymbol` 无条件写 `O2`） |
 | 字母本身显示 | ✅ 正常（`S`/`Q`…） |
 | App 内面板 | ✅ QWERTY 排布（贴合 26 键键盘），支持横屏；**只借 superMi 的配色**（白卡 + primary/soft/ghost 按钮）；**一个功能整体一行**（纯文字标题 + 控件同行，无图标瓦片：测试框 / 生效方式 / 应用修改 / root / 快捷入口）；顶栏=**纯色底**（`bg_header`，普通 App 的 app bar 样式）＋标题/副标题＋小圆「!」(22dp)＋「横屏/竖屏」；**顶栏三个控件（`搜` 方块 / `!` 圆钮 / `横屏` 胶囊）为深蓝底(`header_ctl_bg`)+白字**（2026-10-05 从「半透明白 → 纯白 → 深蓝」调过三轮，纯白太扎眼）；`重启搜狗生效` 文字明确；**26 键标题右侧：「大键/标准」尺寸开关(在重置左边) + 「重置」**（大键=**放弃键盘排布，改 4 列大方块**，但**仍按原键盘的三行分组**（Q行/A行/Z行各自成块、逗号句号一组），组间用分隔线隔开，`#bigKey` 持久化；标准=键盘排布+行分隔线）；**26 键卡片竖屏近满宽(6dp 边距)/横屏 24dp 边距**；分段控件高亮块与灰底等高；键位=淡灰圆角小块（改过变淡蓝），触摸高度 34dp；底部无多余留白 |
+| 状态栏留白 | ✅ Android 15+ 强制 edge-to-edge（targetSdk 36），顶栏会被画到状态栏底下。`onCreate` 里给根 `ScrollView` 装 `setOnApplyWindowInsetsListener`：把 `systemBars` 的 top 加进顶栏的上内边距、bottom 加进内容区下内边距（API 30+ 用 `WindowInsets.Type.systemBars()`，更低用已废弃的 `getSystemWindowInset*`），并 `requestApplyInsets()` 主动触发一次。旧系统 inset 被 decor 消费 → 回调拿到 0 → 老设备布局不变（2026-10-05） |
 | 暗色模式 | ✅ 支持（2026-10-05）：`values-night/colors.xml` 整套调色板 + `values-night/styles.xml`（同为 `AppTheme`，父主题换成 `Theme.Material.NoActionBar`）。顶栏在暗色下变成**普通深色 app bar**（不再亮蓝），控件为深底+浅蓝字。manifest 里 `uiMode` 被声明为自行处理，所以 `onConfigurationChanged` 里检测 night 位变化后 `recreate()` 才会重新取色 |
 | 说明横幅 | ✅ 标题下一条黄色内联横幅（一段话 + `✕`），由顶栏的小圆 `!` 按钮展开/收起；`✕` 写入独立的 `ui` pref，之后默认不显示 |
 | 重启后自动弹键盘 | ✅ 点「重启搜狗生效」= **先自动保存**再重启；成功后自动把键盘唤起并聚焦到测试输入框（持续重试 ~8s，因为 IME 刚被强杀需时间重启） |
@@ -26,7 +27,7 @@
 | 面板内重启 | ✅ 已授权可用（2026-10-05 已把本 App 加入 Magisk SuList） |
 | 模块包名 | `com.qoder.sogousym`（App 名「搜狗符号」） |
 | 启动图标 | ✅ 自适应图标：浅色（近白冰蓝）底 + 扁平鲜蓝键帽 + 白色 `@` + 深蓝铅笔角标；另含各密度 PNG 兜底（资源见 §2） |
-| 版本 | versionCode 82 / versionName 0.81 |
+| 版本 | versionCode 86 / versionName 0.85 |
 | 作用域 | `com.sohu.inputmethod.sogou` |
 | 测试环境 | Android 13 + Magisk(白名单 SuList) + LSPosed 2.1.1 |
 
@@ -137,7 +138,7 @@ new Key(2, "Q", "Key_Q",    "1",      "Key_Q",    "1");
 7. **上划为什么改不了**：实测改主题文件 `MINOR_LABEL`、写 `ForeignKeyInfo` 全部字段、写 UPPER/MIDDLE/SECOND 标签，**上划都仍出原符号** → 上划取值来自搜狗引擎内部（native）。改主题文件只影响"角标显示"。
    - 2026-10-05 复挖佐证：26 键字母键段在 `template.ini` 里只有 `LABEL`/`MINOR_LABEL`/`TEXT`，**没有任何上划属性**；dex 里却有独立的上划提交概念 `COMMIT_TYPE_SLIDE_UP`、`COMMIT_PUNCTUATION_BY_SLIDE_UP`、`FUNC_UP_SLIDE_*`，以及键模型的 `UPPER_LABEL` / `POPUP_LONGPRESS_UPPER_LABELS` / `POPUP_LONGPRESS_UPPER_UNICODES`（"UPPER"=上划方向）。说明上划是引擎侧的能力，值来自内置标点表。
    - 搜狗 release 版**关闭了自身日志**，所以无法靠它的 log 定位。要再往前推只能：给模块加探针 hook 候选方法（记录上划时被调用的方法与返回值），**由人工在键盘上真实上划一次**（合成手势触发不了搜狗滑动）来定位；定位后把该返回值改成自定义符号。
-   - 兜底替代方案：在 `commitText` 上做文本替换（提交文本 == 某已配置键的原符号 → 换成自定义符号）。能覆盖上划，但会连带改写从符号面板手动输入的同一符号，需做成开关。
+   - 兜底替代方案：在 `commitText` 上做文本替换（提交文本 == 某已配置键的原符号 → 换成自定义符号）。能覆盖上划；**副作用（从符号面板手输同一符号也被改写）已于 2026-10-05 修掉，见 §5.13**。
    - **2026-10-05 已实现（提交替换）**：探针抓到上划提交走独立路径 `android.*#commitText <- BaseInputLogic#C <- BaseInputLogic#z0`（普通拼音是 `BaseInputLogic#z <- PinyinInputLogic#z`）。于是 hook `commitText`，当调用栈含 `BaseInputLogic#z0` 且提交文本等于某键原符号时，改 `p.args[0]` 成自定义符号 → 上划出自定义符号（实测 `！`→`7`）。
    - **⚠️ 长按与上划共用 `z0`**：长按的提交也来自 `z0`，光看提交路径**分不开**。
    - **英文模式（Typany 引擎）是另一条路**（2026-10-05 补）：英文下提交栈为 `android.hardware.*#commitText <- com.typany.shell.helper.EditorChangeHelper#applyChangeInternal <- EditorChangeHelper#applyChange <- com.typany.shell.Interface#applyEditorChange <- Interface#handleSecondaryInput <- com.sohu.inputmethod.foreign.inputsession.*`。`handleSecondaryInput` 同样**长按与上划共用**（实测两者栈逐帧相同）。因此 `isSlideUp()` 同时认中文的 `BaseInputLogic#z0` 和英文的 `com.typany.shell.Interface#handleSecondaryInput`。**不加这条时英文上划会漏改**（用户实测：S 中 `+`/英 `-`，英文上划回落到原符号 `!`）。
@@ -164,7 +165,12 @@ new Key(2, "Q", "Key_Q",    "1",      "Key_Q",    "1");
     - 备选（更稳的模式信号，未采用）：英文模式的长按提交栈经 `com.typany.shell.helper.EditorChangeHelper`，中文经 `BaseInputLogic`。
     - **配置键派生**（`Mapping.Key#pyKey/enKey`）：段名不同的键直接用段名；**段名共用**的键（`shared()`）派生成 `<段名>_PY` / `<段名>_EN`。`Mapping.configKeyOf(运行时段名, 中英)` 做这个映射。**老配置**若把值存在裸段名下，`MainHook.customOf()` 有兜底回落。
     - ⚠️ **提交替换也必须是两张表**：C/V/M 这类键**中英原符号相同**（都是 `-`/`_`/`/`），若只用一张 `ORIG2CUSTOM`，英文值会覆盖中文 → 现在拆成 `ORIG2CUSTOM_PY` / `ORIG2CUSTOM_EN`（`PUNCT_PY/EN` 同理），提交时按 `CN_MODE` 取。
-13. **⚠️ 长按与上划「同文本」撞车（未解决）**：长按提交的是**自定义符号本身**（`f0.g`），上划提交的是**该键原符号**。若 A 键的自定义符号恰好等于 B 键的原符号、且 B 也设了自定义，则 A 长按会被当成 B 的上划替换掉。
+13. **提交替换不再误伤「符号面板」手输的符号**（2026-10-05 修复）：把 S 的 `！` 换成 `+` 后，从搜狗符号面板点 `！` 也会被换成 `+`，于是再也输不出 `！`。三条来源最后都汇到 `BaseInputLogic#C`，但再往下的栈不同：
+    - 手势（快划 / 长按字母键）：`PinyinInputLogic#x0 <- b54#G0 <- q0#handleMessage`
+    - 主键盘逗号/句号键：`PinyinInputLogic#F0 <- b54#L0 <- w0#handleMessage`
+    - **符号面板**：`PinyinInputLogic#p0 <- b54#y0 <- h3#handleMessage`
+    - 于是新增 `isSymbolPanelPath()`（栈里出现 `PinyinInputLogic#p0` 或 `inputsession.h3#handleMessage` 即判为面板），替换前先排除 → 面板手输保持原样，手势与逗号/句号键的替换不受影响。实测：面板点 `!` 保持 `!`（S 英文自定义为 `哈` 时不再被换）、快划 S 仍 `！`→`+`、逗号键仍 `，`→`8`。
+14. **⚠️ 长按与上划「同文本」撞车（未解决）**：长按提交的是**自定义符号本身**（`f0.g`），上划提交的是**该键原符号**。若 A 键的自定义符号恰好等于 B 键的原符号、且 B 也设了自定义，则 A 长按会被当成 B 的上划替换掉。
     - 复现（v0.66，都生效模式）：S 中 `+`/英 `-`，C 中 `q`/英 `w` → 英文长按 S 出 `-`，被替换成 C 的 `w`。
     - 试过的解法都不可行：①哨兵只解决「仅上划」里长按 vs 上划的区分，对本撞车没用（都生效模式下长按本来就出自定义本身）；②用调用栈区分——实测中英两侧长按与上划的入口**参数完全相同**（英文都是 `com.typany.shell.Interface#handleSecondaryInput(text, 1)`，中文同走 `BaseInputLogic#z0`），分不开；③「显示与提交分开」——`f0.g` 同时用于气泡渲染与长按提交，改一个另一个跟着变，无法分开；④给值追加标记——引擎把值**截断到第一个字符**，标记进不了提交。
     - 可能的后续方向（未验证）：hook 更上层的手势/触摸处理（`handleSecondaryInput` 之上）拿手势类型。

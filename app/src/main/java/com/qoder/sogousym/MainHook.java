@@ -426,10 +426,12 @@ public class MainHook implements IXposedHookLoadPackage {
                         }
                         String rep = origMap().get(t);
                         if (rep != null && !rep.equals(t)) {
-                            // Comma/period have no long-press, so they always apply;
-                            // letters only on the swipe-up path, and only if enabled.
+                            // Comma/period have no long-press, so they always apply; letters only on
+                            // the gesture path, and only if that gesture is enabled. Either way the
+                            // Sogou symbol panel must be left alone — otherwise typing the original
+                            // symbol from it would come out as the custom one.
                             boolean punct = punctSet().contains(t);
-                            if (punct || (slideUp && swipeEnabled())) {
+                            if (!isSymbolPanelPath() && (punct || (slideUp && swipeEnabled()))) {
                                 p.args[0] = rep;
                                 XposedBridge.log(TAG + "replace " + t + " -> " + rep);
                             }
@@ -453,6 +455,26 @@ public class MainHook implements IXposedHookLoadPackage {
         } catch (Throwable t) {
             XposedBridge.log(TAG + "hook commitText failed: " + t);
         }
+    }
+
+    /**
+     * True when the current commit came from the Sogou symbol panel (符号列表) rather than from the
+     * keyboard keys. Both end up in {@code BaseInputLogic#C}, but the panel's stack runs through
+     * {@code PinyinInputLogic#p0} / the symbol-page message handler, while a key or a swipe runs
+     * through {@code PinyinInputLogic#x0} (gesture) or {@code b54#L0} (punctuation key).
+     */
+    private static boolean isSymbolPanelPath() {
+        for (StackTraceElement e : new Throwable().getStackTrace()) {
+            String cn = e.getClassName();
+            String mn = e.getMethodName();
+            if (cn.endsWith("PinyinInputLogic") && "p0".equals(mn)) {
+                return true;
+            }
+            if (cn.endsWith("inputsession.h3") && "handleMessage".equals(mn)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
