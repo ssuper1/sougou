@@ -1,9 +1,9 @@
 # 交接文档 · 搜狗输入法 26 键「长按符号自定义」LSPosed 模块
 
-> 最后更新：2026-10-05
+> 最后更新：2026-10-05（下午补：新增搜狗 v20.17.0 兼容 + 卡死根因结论）
 
 ## 一句话
-给手机搜狗输入法（`com.sohu.inputmethod.sogou` v12.0）的 26 键加一个 LSPosed 模块：**App 内像键盘一样给每个键填自定义符号，长按该键即输入它**，并在角标上同时显示原符号（方便对照）。
+给手机搜狗输入法（`com.sohu.inputmethod.sogou`）的 26 键加一个 LSPosed 模块：**App 内像键盘一样给每个键填自定义符号，长按该键即输入它**，并在角标上同时显示原符号（方便对照）。**同时支持旧版 v12.0 和新版 v20.17.0（按运行时探测自动选 hook 集）**。
 
 ## 当前状态
 | 项 | 状态 |
@@ -27,8 +27,9 @@
 | 面板内重启 | ✅ 已授权可用（2026-10-05 已把本 App 加入 Magisk SuList） |
 | 模块包名 | `com.qoder.sogousym`（App 名「搜狗符号」） |
 | 启动图标 | ✅ 自适应图标：浅色（近白冰蓝）底 + 扁平鲜蓝键帽 + 白色 `@` + 深蓝铅笔角标；另含各密度 PNG 兜底（资源见 §2） |
-| 版本 | versionCode 86 / versionName 0.85 |
+| 版本 | versionCode 96 / versionName 0.86 |
 | 作用域 | `com.sohu.inputmethod.sogou` |
+| 兼容的搜狗版本 | **v12.0（旧）/ v20.17.0（新，versionCode 2620）**——按运行时探测选 hook 集（见 §5.16）。v20 实测：角标「自定义 + 原符号」、长按、上划输出自定义符号均生效 |
 | 测试环境 | Android 13 + Magisk(白名单 SuList) + LSPosed 2.1.1 |
 
 ---
@@ -175,6 +176,25 @@ new Key(2, "Q", "Key_Q",    "1",      "Key_Q",    "1");
     - 试过的解法都不可行：①哨兵只解决「仅上划」里长按 vs 上划的区分，对本撞车没用（都生效模式下长按本来就出自定义本身）；②用调用栈区分——实测中英两侧长按与上划的入口**参数完全相同**（英文都是 `com.typany.shell.Interface#handleSecondaryInput(text, 1)`，中文同走 `BaseInputLogic#z0`），分不开；③「显示与提交分开」——`f0.g` 同时用于气泡渲染与长按提交，改一个另一个跟着变，无法分开；④给值追加标记——引擎把值**截断到第一个字符**，标记进不了提交。
     - 可能的后续方向（未验证）：hook 更上层的手势/触摸处理（`handleSecondaryInput` 之上）拿手势类型。
     - 用户可规避：别把某键的自定义填成另一个键的原符号（原符号见 `Mapping` 的 `pyOrig`/`enOrig`）。
+15. **搜狗 v20.17.0 的混淆映射（2026-10-05 实测，用 dexdump 反汇编 base.apk 定出）**：升级后**旧类名整体失效**（`hp`/`on`/`k1`/`tn`/`ws`/`ma2`/`tf4`/`cw7`/`i40`/`gn` 全部 ClassNotFound），主题解析改到 `com.sogou.theme.parse.parseimpl.*`：
+    - 键模型：`com.sogou.theme.data.key.b` → **`com.sogou.theme.data.key.c`**（`c extends BaseKeyData`）；`BaseKeyData` / `ForeignKeyInfo` 类名未变。
+    - 角标（MINOR_LABEL）：`b.O2(String)` → **`c.R2(CharSequence)`**（在 `parseimpl.a#B` 的 `"MINOR_LABEL"` 分支里被调用）。
+    - 属性 setter：`k1.B(b,keyName,attr,val,tn)` → **`com.sogou.theme.parse.parseimpl.a#B(c, String keyName, String attr, String val, com.sogou.theme.data.view.a)`**。
+    - 长按弹窗属性在 **`com.sogou.theme.parse.parseimpl.q#B`**：`POPUP_LONGPRESS_LABELS` → `ForeignKeyInfo.g`，`_UPPER_LABELS` → `.i`，`_UNICODES` → `.h`。
+    - 长按数据 getter：`b.f0()` → **`BaseKeyData.m0()`**（返回同一个 `ForeignKeyInfo`；public 字段仍是 `g/h/i/j/l`，类型 g/i=CharSequence、h/j=int[]、l=int）→ `writeForeignKey` 只改方法名即可。
+    - **不再有 tinker 补丁**：设备上已无 `/data/data/.../tinker/`，真实业务类就在 `lp.classLoader`（`PathClassLoader`）上（旧版在 `DelegateLastClassLoader` 上）。
+    - 提交链路名字都还在：`BaseInputLogic#z0`/`#C`、`com.typany.shell.Interface#handleSecondaryInput`、`com.sogou.imskit.core.input.inputconnection.CachedInputConnection` → **提交替换逻辑不用改**。
+    - ⚠️ **但手势判定方法名变了**：v12 长按/上划共用入口 `BaseInputLogic#z0`，v20 改成了 **`BaseInputLogic#D0`**（实测提交栈 `commitText <- BaseInputLogic#D <- BaseInputLogic#D0`）。所以 `isSlideUp()` 要按版本取 `z0`(v12) / `D0`(v20)，否则**新版上划不替换**（上划提交原符号 `！` 但判 `slideUp=false`，直接漏出去）。
+    - v20 的 `ForeignKeyInfo` **只需写 `g`**（弹窗标签+长按提交值）；`h/j/l` 在新版是引擎自己的后备数组，覆盖成外来值会让引擎在长按自定义键时做多余工作、表现为**卡顿**（2026-10-05 改为 v20 只写 `g`）。
+    - 复现方法：`dexdump -d <dex> | grep 'const-string.*"MINOR_LABEL"'` 找属性 setter；`findAndHookMethod` 前先用 `findClassIfExists` 探测。
+16. **模块改为运行时版本探测**：`installAll(cl)` 先用 `findClassIfExists` 探测 `com.sogou.theme.parse.parseimpl.a`（→ v20）/ `hp`（→ v12），只装对应那套 hook；探测**不抛异常**（旧版每次 findClass 失败都产生异常栈、刷 LSPosed 日志）。装 v20 时钩 `parseimpl.a#B` + `parseimpl.q#B` + `commitText`；装 v12 时钩 `hp.j`/`on.e`/`k1.B`/`tn.P` + `commitText`。
+    - ⚠️ **探测必须按 loader 限次数**（`PROBED` / `MAX_PROBES=3`）：`installAll` 是从 `ClassLoader.loadClass` 的 after-hook 里调的，不承载搜狗类的动态 dex loader（kuikly / `InMemoryDexClassLoader`）若每次都重新探测，会因为探测自身触发 loadClass 而**递归放大**、拖垮 class 加载。
+    - **v20 下不再挂 `ClassLoader.loadClass` 全局 hook**（2026-10-05 卡顿优化）：该 hook 只为发现 v12 的热修复 `DelegateLastClassLoader`；v20 的真类就在 `lp.classLoader` 上，装了它等于给**每次类加载**加一层 Xposed 跳板 → 打字卡顿。改法：`handleLoadPackage` 先 `installAll(lp.classLoader)`，只有 `VER != 2` 才 `hookLoaderDiscovery()`（callback 里也加 `if (VER==2) return;` 兜底）。实测打字掉帧尾部尖峰消失（去掉前 99 分位 350ms/90 分位 20ms → 去掉后 90 分位 17ms、95 分位 19ms，无 350ms 尖峰，`dumpsys gfxinfo com.sohu.inputmethod.sogou`）。
+    - 已删除的"诊断 hook"（`hookF0`/`hookHpH`/`hookKeyCtor`/`sectionParser`）：它们在新版会**误绑到热门方法**——`com.sogou.theme.data.key.BaseKeyData#F0()` 在 v20 是返回 int 的热方法（不是角标 getter），旧代码在它 after-hook 里做反射 + 刷日志，属纯负担。
+17. **⚠️「输入法卡死」的真正根因（2026-10-05 实测，与模块无关）**：搜狗 IME 进程被 **OPPO ColorOS 的 `OplusHansManager`（应用速冻）** 用 cgroup freezer 反复冻结（日志 `OplusHansManager: freeze uid: 10344 com.sohu.inputmethod.sogou pids: [...] scene: LcdOn`，状态机 `U→SM→R→M→F`，约每 15~30s 一轮）。冻结后输入事件无人响应 → `ANR in com.sohu.inputmethod.sogou`（`Input dispatching timed out ... Waited 5000ms for MotionEvent`）→ 系统 `Killing ... (adj 100): bg anr` → 重启 → 循环。ANR trace 里**全线程 `do_freezer_trap`**（Java 栈 dump 不到，`libdebuggerd_client: failed to read status response from tombstoned`）。
+    - **对照实验（关键）**：`adb uninstall com.qoder.sogousym`（此时 LSPosed 里没有任何模块注入搜狗）后，键盘照样每 30~45s 被冻结、100 秒内 4 次 ANR/杀进程；装「零 hook」版模块同样冻结。→ **不是模块导致**，触发点是搜狗 v20.17.0 自身被 OPPO 省电策略判定为可冻结。
+    - 可行规避：把「搜狗输入法」加入 ColorOS 电池/省电白名单（不允许速冻 / 后台冻结），或换用/降级输入法版本。
+    - 排查命令：`adb logcat | grep -E "OplusHansManager|ANR in com.sohu.inputmethod.sogou|freeze uid: 10344"`。
 
 ---
 
@@ -189,7 +209,12 @@ new Key(2, "Q", "Key_Q",    "1",      "Key_Q",    "1");
 - 保存后需**强杀搜狗再拉起键盘**才生效（面板「重启搜狗生效」按钮；该按钮需 Magisk 给本 App 授权 root，未授权时会失败——面板 root 自检区会说明，也可用「搜狗·强行停止」手动停）。
 - 依赖搜狗 v12.0 的混淆类名（`on`/`hp`/`k1`/`b`/`on#e`…）；**搜狗升级后可能失效**，需按 §4/§5/§7 重新定位。
 - 提交日志行含 `cn=<true|false>`（当前判定到的中/英模式），排查中英相关的替换问题时先看它。
-- 诊断探针（getter/commit/sanity）仍留在 MainHook 里，会给 LSPosed 日志加点噪音（有上限，无害）。
+- **v20.17.0 兼容范围**（2026-10-05 实机验证）：角标（自定义 + 原符号）、「都生效」模式下的**长按**与**上划**输出自定义符号均已生效（`S` 中文自定义 `+` → 角标 `＋ ！`、长按出 `+`、上划 `replace ！ -> +`）。**未在 v20 上实机验证**：仅长按 / 仅上划（哨兵法）两种模式、逗号/句号的输出替换、英文模式。v12.0 代码路径保持原样，但本次**无法在 v12 设备上回归**（设备已升级）。
+- **触发自定义键时的卡顿排查**（2026-10-05）：加探针确认**长按/上划期间模块 hook 一次都没被调用**（解析期才 27 次 MINOR_LABEL，手势期 0 次；长按提交的已是自定义符号、`interesting=false` 故不做替换）→ 模块代码不在该手势路径上。已把模块侧可能的开销降到最低（v20 只写 `g`、去掉全局 loadClass hook）。该机根因仍是 §5.17 的 OPPO 冻结/杀进程循环（测量期间 IME 进程每几秒重启一次），建议先给搜狗加省电白名单再评估首键延迟。
+- **模块不再有诊断探针**（`F0`/`hp.h`/getter 等已删除，避免误绑新版的同名热方法）；排查时临时把 `MainHook.DEBUG_COMMIT` 置 `true` 可打印每次提交及调用栈。
+- **卸载重装的副作用**（本次踩过）：① LSPosed 里模块记录的 APK 路径会失效，需在 LSPosed 管理器里重新启用/重新安装一次模块；② Magisk SuList 授权按 uid，重装后 uid 变 → 面板显示「未授权」，需回 Magisk 重新勾选；③ 模块的 SharedPreferences（自定义符号）会随重装清空。
+- **⚠️「输入法卡死」不是模块问题**（见 §5.17），是 OPPO 速冻搜狗进程所致，卸载模块后同样复现。排查先看 `OplusHansManager freeze uid: 10344`。
+- **打字卡顿**：模块侧已把最大开销（全局 `ClassLoader.loadClass` hook）在 v20 去掉（见 §5.16）。剩余掉帧（实测约 10% janky frames、90 分位 ~17ms）主要来自搜狗自身渲染 + OPPO 冻结后的解冻延迟；给搜狗加省电白名单同样能改善首键延迟。
 
 ---
 
@@ -198,6 +223,14 @@ new Key(2, "Q", "Key_Q",    "1",      "Key_Q",    "1");
 ```bash
 # 看模块日志
 adb logcat | grep SogouSym
+
+# 卡死排查（OPPO 速冻搜狗进程）：谁冻结了它 / 是否 ANR / 是否被杀
+adb logcat | grep -E "OplusHansManager|ANR in com.sohu.inputmethod.sogou|freeze uid: 10344"
+adb shell su -c 'ls -t /data/anr/ | head -1'   # 最新 ANR trace；全线程 do_freezer_trap = 被冻结
+
+# 反汇编（本机 build-tools 自带 dexdump）
+/d/App/AndroidSdk/build-tools/34.0.0/dexdump.exe -d <dex> > x.dis
+# 找 v20 属性 setter：grep 'const-string.*"MINOR_LABEL"' x.dis
 
 # 强杀搜狗（让新 hook 生效）
 adb shell su -c 'am force-stop com.sohu.inputmethod.sogou'
