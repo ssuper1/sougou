@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <permission
+        android:name="com.qoder.sogousym.permission.RECOVERY_CLEANUP"
+        android:protectionLevel="signature" />
+
     <queries>
         <package android:name="com.sohu.inputmethod.sogou" />
     </queries>
@@ -27,6 +31,24 @@
             android:name=".ConfigProvider"
             android:authorities="com.qoder.sogousym.config"
             android:exported="true" />
+
+        <!-- Enabled only for the root recovery operation, then returned to this disabled default. -->
+        <service
+            android:name="android.inputmethodservice.InputMethodService"
+            android:label="输入法状态刷新"
+            android:enabled="false"
+            android:exported="true"
+            android:permission="android.permission.BIND_INPUT_METHOD">
+            <intent-filter>
+                <action android:name="android.view.InputMethod" />
+            </intent-filter>
+            <meta-data android:name="android.view.im" android:resource="@xml/recovery_input_method" />
+        </service>
+
+        <receiver
+            android:name=".InputMethodRecoveryReceiver"
+            android:exported="true"
+            android:permission="com.qoder.sogousym.permission.RECOVERY_CLEANUP" />
 
         <meta-data
             android:name="xposedmodule"

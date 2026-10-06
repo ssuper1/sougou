@@ -533,7 +533,7 @@ public class MainActivity extends Activity {
         LinearLayout card = rowCard();
         LinearLayout r = row();
         r.addView(label("应用修改"));
-        r.addView(primaryButton("保存", new View.OnClickListener() {
+        r.addView(primaryButton("仅保存", new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 save();
@@ -578,6 +578,22 @@ public class MainActivity extends Activity {
         slp.leftMargin = dp(10);
         head.addView(rootStatus, slp);
         card.addView(head, matchLp());
+        LinearLayout recovery = row();
+        recovery.addView(label("输入法冻结"));
+        Button repair = softButton("尝试修复缓存导致的卡顿", new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                repairInputMethod();
+            }
+        });
+        repair.setContentDescription("修复重装后输入法冻结，需要 Root 权限");
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            repair.setTooltipText("切换输入法后恢复搜狗，刷新系统输入法记录");
+        }
+        LinearLayout.LayoutParams recoveryLp = matchLp();
+        recoveryLp.topMargin = dp(6);
+        recovery.addView(repair, weightH(40, dp(10)));
+        card.addView(recovery, recoveryLp);
         return card;
     }
 
@@ -924,6 +940,10 @@ public class MainActivity extends Activity {
     }
 
     private void doRestart() {
+        if (InputMethodRecovery.isRunning()) {
+            toast("正在修复输入法，请稍候");
+            return;
+        }
         if (restartInProgress) {
             return;
         }
@@ -1042,6 +1062,61 @@ public class MainActivity extends Activity {
 
     // ------------------------------------------------------------------- root check
 
+    private void repairInputMethod() {
+        if (BuildConfig.NON_ROOT) {
+            toast("修复冻结需要 Root 权限");
+            return;
+        }
+        if (restartInProgress || !InputMethodRecovery.begin()) {
+            toast("正在处理输入法，请稍候");
+            return;
+        }
+        cancelImeRetry();
+        toast("正在刷新输入法状态…");
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                String[] result = new String[]{"1", "无可用 Root 权限，请先授权"};
+                try {
+                    for (String su : SU_CANDIDATES) {
+                        String[] root = execCapture(su, "-c", "id");
+                        if ("-1".equals(root[0])) {
+                            continue;
+                        }
+                        if ("0".equals(root[0]) && root[1].contains("uid=0")) {
+                            InputMethodRecovery.enableHelper(MainActivity.this);
+                            result = execCapture(30000, su, "-c", InputMethodRecovery.script());
+                        }
+                        break;
+                    }
+                } catch (RuntimeException e) {
+                    result = new String[]{"1", String.valueOf(e.getMessage())};
+                } finally {
+                    try {
+                        InputMethodRecovery.resetHelperIfUnused(MainActivity.this);
+                    } catch (RuntimeException ignored) {
+                        // The root transaction also requests cleanup through the protected receiver.
+                    }
+                    InputMethodRecovery.finish();
+                }
+                final String[] outcome = result;
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (isFinishing() || isDestroyed()) {
+                            return;
+                        }
+                        boolean ok = "0".equals(outcome[0]);
+                        toast(ok ? "已刷新输入法状态" : "修复失败：" + outcome[1]);
+                        if (ok && activityResumed) {
+                            showImeSoon();
+                        }
+                    }
+                });
+            }
+        }, "SogouSym-recovery").start();
+    }
+
     private void checkRoot() {
         if (rootStatus == null) {
             return;
@@ -1097,6 +1172,10 @@ public class MainActivity extends Activity {
 
     /** Run a command and return {exitCode, mergedOutput}. Kills it after 8s. */
     private static String[] execCapture(String... cmd) {
+        return execCapture(8000, cmd);
+    }
+
+    private static String[] execCapture(final long timeoutMs, String... cmd) {
         Process process = null;
         Thread killer = null;
         try {
@@ -1108,7 +1187,7 @@ public class MainActivity extends Activity {
                 @Override
                 public void run() {
                     try {
-                        Thread.sleep(8000);
+                        Thread.sleep(timeoutMs);
                         p.destroy();
                     } catch (InterruptedException ignored) {
                     }

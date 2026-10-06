@@ -59,6 +59,40 @@ public class LifecycleInstrumentation extends Instrumentation {
             activity = (MainActivity) startActivitySync(intent);
             waitForIdleSync();
             Map<String, String> expected = new LinkedHashMap<>(testing);
+            if ("true".equals(arguments.getString("recovery"))) {
+                test("rootRecoveryRestoresImeAndDisablesHelper", () -> {
+                    String originalIme = android.provider.Settings.Secure.getString(
+                            getTargetContext().getContentResolver(), "default_input_method");
+                    String enabled = android.provider.Settings.Secure.getString(
+                            getTargetContext().getContentResolver(), "enabled_input_methods");
+                    check(originalIme != null && originalIme.startsWith(MainHook.PKG + "/"),
+                            "Sogou must be the current IME before recovery");
+                    String helper = "com.qoder.sogousym/android.inputmethodservice.InputMethodService";
+                    android.content.ComponentName component = android.content.ComponentName.unflattenFromString(helper);
+                    check(!((android.view.inputmethod.InputMethodManager) getTargetContext().getSystemService(
+                            android.content.Context.INPUT_METHOD_SERVICE)).getInputMethodList().stream()
+                            .anyMatch(info -> helper.equals(info.getId())), "Helper should be disabled before use");
+                    onUi(() -> {
+                        android.widget.Button repair = buttonWithText(activity.getWindow().getDecorView(), "修复冻结");
+                        check(repair != null, "Root recovery button missing");
+                        check(repair.performClick(), "Recovery button click failed");
+                        repair.performClick();
+                        android.widget.Button restart = buttonWithText(activity.getWindow().getDecorView(), "重启搜狗生效");
+                        check(restart != null, "Root restart button missing");
+                        restart.performClick();
+                    });
+                    await(() -> helper.equals(android.provider.Settings.Secure.getString(
+                            getTargetContext().getContentResolver(), "default_input_method")), 12000);
+                    await(() -> originalIme.equals(android.provider.Settings.Secure.getString(
+                            getTargetContext().getContentResolver(), "default_input_method"))
+                            && getTargetContext().getPackageManager().getComponentEnabledSetting(component)
+                            == android.content.pm.PackageManager.COMPONENT_ENABLED_STATE_DEFAULT
+                            && enabled.equals(android.provider.Settings.Secure.getString(
+                            getTargetContext().getContentResolver(), "enabled_input_methods")), 15000);
+                    check(expected.equals(Prefs.load(getTargetContext())), "Recovery changed symbol configuration");
+                });
+                return;
+            }
             if (releaseSmoke) {
                 test("releasePunctuationAndNormalTyping", () -> {
                     android.widget.EditText box = firstEditText(activity.getWindow().getDecorView());
@@ -312,6 +346,23 @@ public class LifecycleInstrumentation extends Instrumentation {
         return null;
     }
 
+    private android.widget.Button buttonWithText(View view, String text) {
+        if (view instanceof android.widget.Button
+                && text.contentEquals(((android.widget.Button) view).getText())) {
+            return (android.widget.Button) view;
+        }
+        if (view instanceof android.view.ViewGroup) {
+            android.view.ViewGroup group = (android.view.ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) {
+                android.widget.Button found = buttonWithText(group.getChildAt(i), text);
+                if (found != null) {
+                    return found;
+                }
+            }
+        }
+        return null;
+    }
+
     private void shell(String command) throws Exception {
         try (java.io.InputStream output = new ParcelFileDescriptor.AutoCloseInputStream(
                 getUiAutomation().executeShellCommand(command))) {
@@ -343,7 +394,8 @@ public class LifecycleInstrumentation extends Instrumentation {
         Bundle status = new Bundle();
         status.putString("class", getClass().getName());
         status.putString("test", name);
-        status.putInt("numtests", "true".equals(arguments.getString("releaseSmoke")) ? 1 : 5);
+        status.putInt("numtests", "true".equals(arguments.getString("releaseSmoke"))
+                || "true".equals(arguments.getString("recovery")) ? 1 : 5);
         status.putInt("current", ++current);
         sendStatus(1, status);
         try {
