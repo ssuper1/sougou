@@ -339,7 +339,7 @@ public class MainActivity extends Activity {
         bar.setLayoutParams(blp);
 
         TextView msg = new TextView(this);
-        msg.setText("搜狗 v12 的逗号、句号键面暂保留原符号。");
+        msg.setText("适配最新v20.17.0，可能一些版本的逗号、句号键面修改后还是原符号但实际不影响使用。");
         msg.setTextSize(11);
         msg.setTextColor(c(R.color.blue_text));
         msg.setLineSpacing(dp(2), 1f);
@@ -425,7 +425,7 @@ public class MainActivity extends Activity {
         card.addView(board);
 
         TextView warn = new TextView(this);
-        warn.setText("搜狗 v12 的逗号、句号键面暂保留原符号。");
+        warn.setText("适配最新v20.17.0，可能一些版本的逗号、句号键面修改后还是原符号但实际不影响使用。");
         warn.setTextSize(10);
         warn.setTextColor(c(R.color.text_tertiary));
         warn.setPadding(0, dp(6), 0, 0);
