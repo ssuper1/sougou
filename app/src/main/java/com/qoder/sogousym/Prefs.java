@@ -17,7 +17,7 @@ public final class Prefs {
 
     /** Must match applicationId in build.gradle.kts. */
     public static final String MODULE_PKG = "com.qoder.sogousym";
-    public static final String FILE = "config";
+    public static final String FILE = BuildConfig.EMBEDDED ? "sogousym_config" : "config";
 
     /** section name -> custom symbol, non-empty entries only. Called from the hook process. */
     public static Map<String, String> loadForHook(Context ctx) {

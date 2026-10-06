@@ -2,6 +2,9 @@ plugins {
     alias(libs.plugins.android.application)
 }
 
+val embeddedSettings = providers.gradleProperty("embedded").orElse("false").get().toBoolean()
+val nonRoot = embeddedSettings || providers.gradleProperty("nonRoot").orElse("false").get().toBoolean()
+
 android {
     namespace = "com.qoder.sogousym"
     compileSdk {
@@ -17,6 +20,12 @@ android {
         versionCode = 96
         versionName = "0.86"
         testInstrumentationRunner = "com.qoder.sogousym.LifecycleInstrumentation"
+        buildConfigField("boolean", "NON_ROOT", nonRoot.toString())
+        buildConfigField("boolean", "EMBEDDED", embeddedSettings.toString())
+    }
+
+    buildFeatures {
+        buildConfig = true
     }
 
     buildTypes {

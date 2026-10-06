@@ -120,7 +120,9 @@ public class MainActivity extends Activity {
         content.addView(keyboardCard(current));
         content.addView(modeCard());
         content.addView(actionCard());
-        content.addView(rootCard());
+        if (!BuildConfig.NON_ROOT) {
+            content.addView(rootCard());
+        }
         View nav = navCard();
         LinearLayout.LayoutParams nlp = (LinearLayout.LayoutParams) nav.getLayoutParams();
         if (nlp != null) {
@@ -158,7 +160,9 @@ public class MainActivity extends Activity {
         setContentView(sv);
         sv.requestApplyInsets();
 
-        checkRoot();
+        if (!BuildConfig.NON_ROOT) {
+            checkRoot();
+        }
     }
 
     @Override
@@ -536,7 +540,7 @@ public class MainActivity extends Activity {
             }
         }), weightH(40, dp(6)));
         r.addView(spacerW(dp(6)));
-        r.addView(primaryButton("重启搜狗生效", new View.OnClickListener() {
+        r.addView(primaryButton(BuildConfig.NON_ROOT ? "保存并应用" : "重启搜狗生效", new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 doRestart();
@@ -904,7 +908,7 @@ public class MainActivity extends Activity {
 
     private void save() {
         persist();
-        toast("已保存，点「重启搜狗生效」");
+        toast(BuildConfig.NON_ROOT ? "已保存，点「保存并应用」" : "已保存，点「重启搜狗生效」");
     }
 
     /** Write the current fields + mode into the config the hook reads. */
@@ -923,14 +927,22 @@ public class MainActivity extends Activity {
         if (restartInProgress) {
             return;
         }
+        if (BuildConfig.NON_ROOT && !BuildConfig.EMBEDDED) {
+            persist();
+            toast("已保存，强行停止搜狗后生效");
+            open(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    Uri.parse("package:" + SOGOU)));
+            return;
+        }
         restartInProgress = true;
         cancelImeRetry();
         persist();   // restarting saves first, so the keyboard picks up the edits
-        toast("已保存，正在请求重启…");
+        toast(BuildConfig.EMBEDDED ? "已保存，正在应用…" : "已保存，正在请求重启…");
         new Thread(new Runnable() {
             @Override
             public void run() {
-                final String[] r = restartSogou();
+                final String[] r = BuildConfig.EMBEDDED
+                        ? EmbeddedRuntime.restartKeyboard(MainActivity.this) : restartSogou();
                 runOnUiThread(new Runnable() {
                     @Override
                     public void run() {
@@ -1004,7 +1016,8 @@ public class MainActivity extends Activity {
                     @Override
                     public void onClick(DialogInterface d, int which) {
                         reset();
-                        toast("已清空，点「重启搜狗生效」应用");
+                        toast(BuildConfig.NON_ROOT ? "已清空，点「保存并应用」"
+                                : "已清空，点「重启搜狗生效」应用");
                     }
                 })
                 .setPositiveButton("清空并应用", new DialogInterface.OnClickListener() {

@@ -18,7 +18,8 @@ import java.util.Map;
  */
 public class ConfigProvider extends ContentProvider {
 
-    public static final String AUTHORITY = "com.qoder.sogousym.config";
+    public static final String AUTHORITY = BuildConfig.EMBEDDED
+            ? "com.sohu.inputmethod.sogou.sogousym.config" : "com.qoder.sogousym.config";
     public static final Uri URI = Uri.parse("content://" + AUTHORITY + "/config");
 
     @Override

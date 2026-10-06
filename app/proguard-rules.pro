@@ -3,3 +3,5 @@
 -keep class com.qoder.sogousym.Mapping { *; }
 -keep class com.qoder.sogousym.Prefs { *; }
 -keep class com.qoder.sogousym.ConfigProvider { *; }
+-keep class com.qoder.sogousym.EmbeddedSettingsActivity { *; }
+-keep class com.qoder.sogousym.EmbeddedRuntime { *; }

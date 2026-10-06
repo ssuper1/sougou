@@ -1,12 +1,7 @@
 *.iml
 .gradle
 /local.properties
-/.idea/caches
-/.idea/libraries
-/.idea/modules.xml
-/.idea/workspace.xml
-/.idea/navEditor.xml
-/.idea/assetWizardSettings.xml
+/.idea/
 .DS_Store
 /build
 /captures
@@ -17,6 +12,7 @@ local.properties
 # Project exclude paths
 /app/build/
 
-# Local device screenshots and generated icon previews
-/vibe_images/device_*.png
-/vibe_images/preview_*.png
+# Local development notes and artwork sources
+/HANDOVER.md
+/DEVELOPMENT_GUIDE.md
+/vibe_images/

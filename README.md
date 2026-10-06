@@ -33,6 +33,8 @@
 
 ## 安装与使用
 
+免 Root 双包方案已完成短时实机验证；内置配置页的单包方案仍处于开发验证阶段。构建及使用说明见[免 Root 构建](docs/nonroot.md)。下列步骤适用于原有 Root / LSPosed 版本。
+
 1. 从 [Releases](https://github.com/ssuper1/sougou/releases) 下载并安装 APK。
 2. 在 LSPosed 中启用「搜狗符号」，作用域仅勾选搜狗输入法。
 3. 打开模块，在键位的「中」「英」输入框填写符号，并选择生效方式。
@@ -97,6 +99,10 @@ Linux/macOS：
 
 APK 输出：`app/build/outputs/apk/release/app-release.apk`。
 
+直接运行上述 Gradle 命令生成的是 Root / LSPosed 版单个插件 APK。安装后需要 Root、LSPosed/Xposed，并在 LSPosed 中启用「搜狗符号」且勾选搜狗输入法作用域。
+
+免 Root 方案通过 `tools/nonroot/build.ps1` 构建：`-Mode companion` 生成修改版搜狗输入法和独立配置 App 两个 APK，产物位于 `build/nonroot/companion/`；`-Mode embedded` 生成将配置页打入搜狗的单 APK 原型，当前仍需实机验证。完整命令和使用步骤见[免 Root 构建](docs/nonroot.md)。
+
 当前 Release 构建启用代码优化，使用开发签名配置。不同机器的开发密钥通常不同，自行构建的 APK 不保证能覆盖 Releases 安装包；请保管好自己的签名密钥。
 
-单元测试位于 `app/src/test`；设备诊断测试位于 `app/src/androidTest`，其临时测试输入法不包含在生产 APK 中。[HANDOVER.md](HANDOVER.md) 包含开发与排查记录，其中较旧结论以文首最新记录为准。
+单元测试位于 `app/src/test`；设备诊断测试位于 `app/src/androidTest`，其临时测试输入法不包含在生产 APK 中。

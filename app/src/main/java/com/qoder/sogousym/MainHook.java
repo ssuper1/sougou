@@ -17,6 +17,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
 
 import de.robv.android.xposed.IXposedHookLoadPackage;
+import de.robv.android.xposed.IXposedHookZygoteInit;
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XposedHelpers;
@@ -36,7 +37,7 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
  * Anything that cannot be resolved is skipped instead of throwing, which matters because the
  * old code called findClass on every hotfix loader and turned each miss into an exception.
  */
-public class MainHook implements IXposedHookLoadPackage {
+public class MainHook implements IXposedHookLoadPackage, IXposedHookZygoteInit {
 
     static final String TAG = "SogouSym: ";
     static final String PKG = "com.sohu.inputmethod.sogou";
@@ -321,11 +322,24 @@ public class MainHook implements IXposedHookLoadPackage {
     }
 
     @Override
+    public void initZygote(StartupParam startupParam) {
+        if (BuildConfig.EMBEDDED) {
+            EmbeddedRuntime.setModulePath(startupParam.modulePath);
+        }
+    }
+
+    @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lp) throws Throwable {
         if (!PKG.equals(lp.packageName)) {
             return;
         }
         XposedBridge.log(TAG + "attached " + lp.packageName + " proc=" + lp.processName);
+        if (BuildConfig.EMBEDDED) {
+            EmbeddedRuntime.install(lp.classLoader);
+            if (EmbeddedRuntime.SETTINGS_PROCESS.equals(lp.processName)) {
+                return;
+            }
+        }
         refreshMapAsync();
         installAll(lp.classLoader);
         // The global ClassLoader.loadClass hook only exists to discover v12's hotfix
