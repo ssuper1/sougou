@@ -16,3 +16,7 @@ local.properties
 
 # Project exclude paths
 /app/build/
+
+# Local device screenshots and generated icon previews
+/vibe_images/device_*.png
+/vibe_images/preview_*.png
