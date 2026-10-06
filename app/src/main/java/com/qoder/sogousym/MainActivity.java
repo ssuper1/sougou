@@ -192,6 +192,17 @@ public class MainActivity extends Activity {
         bar.setPadding(dp(18), dp(12), dp(14), dp(12));
 
         FrameLayout logo = new FrameLayout(this);
+        logo.setContentDescription("打开 GitHub 项目");
+        logo.setFocusable(true);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            logo.setTooltipText("打开 GitHub 项目");
+        }
+        logo.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                open(new Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/ssuper1/sougou")));
+            }
+        });
         View tile = new View(this);
         tile.setBackground(dr(R.drawable.bg_btn_header));
         logo.addView(tile, new FrameLayout.LayoutParams(dp(38), dp(38), Gravity.CENTER));
@@ -208,7 +219,7 @@ public class MainActivity extends Activity {
         col.setOrientation(LinearLayout.VERTICAL);
         col.setPadding(dp(10), 0, dp(8), 0);
         TextView title = new TextView(this);
-        title.setText("搜狗 26 键 · 符号自定义");
+        title.setText("搜狗 26 键 ");
         title.setTextColor(c(R.color.header_text));
         title.setTextSize(15);
         title.setTypeface(Typeface.DEFAULT_BOLD);
@@ -216,7 +227,7 @@ public class MainActivity extends Activity {
         title.setEllipsize(android.text.TextUtils.TruncateAt.END);
         col.addView(title);
         TextView sub = new TextView(this);
-        sub.setText("长按 / 上划 · 出你设的符号");
+        sub.setText("符号自定义");
         sub.setTextColor(c(R.color.header_sub));
         sub.setTextSize(11);
         col.addView(sub);
@@ -1119,7 +1130,7 @@ public class MainActivity extends Activity {
         try {
             startActivity(i);
         } catch (Throwable t) {
-            toast("打不开该设置页：" + t);
+            toast("无法打开页面：" + t);
         }
     }
 
