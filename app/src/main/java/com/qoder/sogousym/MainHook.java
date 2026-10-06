@@ -8,6 +8,9 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
 
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
@@ -88,11 +91,11 @@ public class MainHook implements IXposedHookLoadPackage {
      *
      * The engine truncates a key's value to its FIRST character — appending a zero-width or
      * visible marker to the symbol does not survive — and it draws that same character into the
-     * long-press popup, so the sentinel has to be a single code point with no glyph. Consequence:
-     * the popup shows a "NO GLYPH" box on customised keys while this mode is active.
+     * long-press popup. hookPopupDraw substitutes the original symbol only during drawing,
+     * leaving the sentinel intact for input processing.
      */
-    static volatile Map<String, String> SENT_BY_SECTION = Collections.emptyMap();
-    static volatile Map<String, String> SENT2SECTION = Collections.emptyMap();
+    static volatile Map<String, String> SENT_BY_CONFIG_KEY = Collections.emptyMap();
+    static volatile Map<String, String> SENT2ORIGINAL = Collections.emptyMap();
 
     /**
      * The custom symbol configured for a runtime section name, in the mode the keyboard is in.
@@ -160,6 +163,17 @@ public class MainHook implements IXposedHookLoadPackage {
 
     static final Set<String> SEEN = new HashSet<String>();
     static final Set<Integer> INSTALLED = new HashSet<Integer>();
+    static final Set<Integer> QUEUED = new HashSet<Integer>();
+    static final Set<Class<?>> COMMIT_HOOKED = new HashSet<Class<?>>();
+    /** Class discovery must never perform nested class loads on the loadClass callback thread. */
+    static final ExecutorService DISCOVERY = Executors.newSingleThreadExecutor(new ThreadFactory() {
+        @Override
+        public Thread newThread(Runnable r) {
+            Thread t = new Thread(r, "SogouSym-hooks");
+            t.setDaemon(true);
+            return t;
+        }
+    });
 
     /** loader identity -> how many times it has been probed for Sogou's classes. */
     static final Map<Integer, Integer> PROBED = new LinkedHashMap<Integer, Integer>();
@@ -204,26 +218,25 @@ public class MainHook implements IXposedHookLoadPackage {
         PUNCT_EN = punctEn;
     }
 
-    /** Assign each letter key a private-use sentinel for the swipe-only mode. */
+    /** Assign each letter key and mode its own sentinel, which survives Sogou cloning the key. */
     static void buildSentinels() {
         Map<String, String> bySec = new LinkedHashMap<String, String>();
-        Map<String, String> s2sec = new LinkedHashMap<String, String>();
+        Map<String, String> originals = new LinkedHashMap<String, String>();
         int i = 0;
         for (Mapping.Key k : Mapping.KEYS) {
             if (!Mapping.hasLongPress(k)) {
                 continue;
             }
-            for (String sec : new String[]{k.pySection, k.enSection}) {
-                if (bySec.containsKey(sec)) {
-                    continue;
-                }
+            String[] configKeys = {k.pyKey(), k.enKey()};
+            String[] origValues = {k.pyOrig, k.enOrig};
+            for (int mode = 0; mode < configKeys.length; mode++) {
                 String sent = String.valueOf((char) (0xE000 + i++));
-                bySec.put(sec, sent);
-                s2sec.put(sent, sec);
+                bySec.put(configKeys[mode], sent);
+                originals.put(sent, origValues[mode]);
             }
         }
-        SENT_BY_SECTION = bySec;
-        SENT2SECTION = s2sec;
+        SENT2ORIGINAL = originals;
+        SENT_BY_CONFIG_KEY = bySec;
     }
 
     /** Corner always shows "custom + original" (space separated); long-press input depends on mode. */
@@ -242,7 +255,7 @@ public class MainHook implements IXposedHookLoadPackage {
         }
         // Swipe-only: the corner still advertises the custom symbol, but a long-press has to behave
         // as if the key were untouched — so its submitted value is parked on this key's sentinel.
-        String sent = SENT_BY_SECTION.get(section);
+        String sent = SENT_BY_CONFIG_KEY.get(Mapping.configKeyOf(section, CN_MODE));
         if (sent != null) {
             writeForeign(key, sent);
         }
@@ -313,17 +326,21 @@ public class MainHook implements IXposedHookLoadPackage {
                         if (!(ldr instanceof ClassLoader)) {
                             return;
                         }
-                        String lc = ldr.getClass().getName();
-                        if (lc.contains("DelegateLastClassLoader") || lc.contains("PathClassLoader")
-                                || lc.contains("DexClassLoader") || lc.contains("InMemoryDexClassLoader")) {
-                            installAll((ClassLoader) ldr);
-                        }
                         String n = (String) p.args[0];
-                        // Lazily hook the commit class once it is actually loaded.
+                        // Only schedule work for classes that identify a Sogou engine loader.
+                        // Probing arbitrary Path/Dex loaders here used to perform nested loads
+                        // from this callback, while the target loader could still hold its lock.
+                        if ("hp".equals(n)
+                                || "com.sogou.theme.parse.parseimpl.a".equals(n)
+                                || "com.sogou.imskit.core.input.inputconnection.CachedInputConnection".equals(n)) {
+                            enqueueInstall((ClassLoader) ldr);
+                        }
+                        // Lazily hook the commit class once it is actually loaded, also off this
+                        // callback so Xposed reflection cannot extend the class-load critical path.
                         if ("com.sogou.imskit.core.input.inputconnection.CachedInputConnection".equals(n)) {
                             Object c = p.getResult();
                             if (c instanceof Class) {
-                                hookCommitOn((Class<?>) c);
+                                enqueueCommitHook((Class<?>) c);
                             }
                         }
                     } catch (Throwable ignored) {
@@ -336,6 +353,42 @@ public class MainHook implements IXposedHookLoadPackage {
         }
     }
 
+    private void enqueueInstall(final ClassLoader cl) {
+        if (cl == null) {
+            return;
+        }
+        final int id = System.identityHashCode(cl);
+        synchronized (QUEUED) {
+            synchronized (INSTALLED) {
+                if (QUEUED.contains(id) || INSTALLED.contains(id)) {
+                    return;
+                }
+            }
+            QUEUED.add(id);
+        }
+        DISCOVERY.execute(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    installAll(cl);
+                } finally {
+                    synchronized (QUEUED) {
+                        QUEUED.remove(id);
+                    }
+                }
+            }
+        });
+    }
+
+    private void enqueueCommitHook(final Class<?> c) {
+        DISCOVERY.execute(new Runnable() {
+            @Override
+            public void run() {
+                hookCommitOn(c);
+            }
+        });
+    }
+
     private void installAll(ClassLoader cl) {
         if (cl == null) {
             return;
@@ -346,10 +399,8 @@ public class MainHook implements IXposedHookLoadPackage {
                 return;
             }
         }
-        // installAll runs from the ClassLoader.loadClass after-hook, i.e. on the class-load hot
-        // path, for every loader type it recognises. Probing costs class loads of its own, so cap
-        // the number of probes per loader: a loader that never hosts Sogou's classes (the dynamic
-        // feature / kuikly dex loaders) must not be re-probed on every single loadClass.
+        // Dynamic loaders are probed only by the discovery worker. Keep the cap as a guard
+        // against loaders that expose a target class name but do not actually host the engine.
         synchronized (PROBED) {
             Integer n = PROBED.get(id);
             int c = n == null ? 0 : n.intValue();
@@ -378,6 +429,7 @@ public class MainHook implements IXposedHookLoadPackage {
         if (ver == 2) {
             hookAttrNew(cl);
             hookPopupNew(cl);
+            hookPopupDraw(cl);
         } else {
             hookHpJ(cl);
             hookOnE(cl);
@@ -389,6 +441,11 @@ public class MainHook implements IXposedHookLoadPackage {
 
     /** Hook the real commit class once it is loaded. */
     private void hookCommitOn(final Class<?> c) {
+        synchronized (COMMIT_HOOKED) {
+            if (!COMMIT_HOOKED.add(c)) {
+                return;
+            }
+        }
         try {
             XposedBridge.hookAllMethods(c, "commitText", new XC_MethodHook() {
                 @Override
@@ -398,17 +455,14 @@ public class MainHook implements IXposedHookLoadPackage {
             });
             ilog("hooked commitText (lazy) on " + c.getName());
         } catch (Throwable t) {
+            synchronized (COMMIT_HOOKED) {
+                COMMIT_HOOKED.remove(c);
+            }
             XposedBridge.log(TAG + "lazy hook commitText failed: " + t);
         }
     }
 
-    /**
-     * Log every text commit with its caller, and substitute the swipe-up symbol.
-     *
-     * Found via probe: a swipe-up commits through BaseInputLogic#z0 -> BaseInputLogic#C ->
-     * commitText, while normal pinyin goes through BaseInputLogic#z. Long-press shares z0, so the
-     * substitution keys off the committed text instead of the entry method.
-     */
+    /** Substitute configured symbols only on the keyboard's secondary-input route. */
     private void hookCommit(ClassLoader cl) {
         try {
             Class<?> cc = XposedHelpers.findClassIfExists(
@@ -416,22 +470,7 @@ public class MainHook implements IXposedHookLoadPackage {
             if (cc == null) {
                 return;
             }
-            XC_MethodHook cb = new XC_MethodHook() {
-                @Override
-                protected void beforeHookedMethod(MethodHookParam p) {
-                    substituteCommit(p);
-                }
-            };
-            int n = 0;
-            for (Class<?> c = cc; c != null && c != Object.class; c = c.getSuperclass()) {
-                for (java.lang.reflect.Method m : c.getDeclaredMethods()) {
-                    if ("commitText".equals(m.getName())) {
-                        XposedBridge.hookMethod(m, cb);
-                        n++;
-                    }
-                }
-            }
-            ilog("hooked commitText, overloads=" + n);
+            hookCommitOn(cc);
         } catch (Throwable t) {
             XposedBridge.log(TAG + "hook commitText failed: " + t);
         }
@@ -453,10 +492,9 @@ public class MainHook implements IXposedHookLoadPackage {
             if (t.isEmpty()) {
                 return;
             }
-            String sentSec = SENT2SECTION.get(t);
-            boolean interesting = sentSec != null
-                    || ORIG2CUSTOM_PY.containsKey(t) || ORIG2CUSTOM_EN.containsKey(t)
-                    || PUNCT_PY.contains(t) || PUNCT_EN.contains(t);
+            String original = SENT2ORIGINAL.get(t);
+            boolean interesting = original != null
+                    || ORIG2CUSTOM_PY.containsKey(t) || ORIG2CUSTOM_EN.containsKey(t);
             if (!interesting && !DEBUG_COMMIT) {
                 return;
             }
@@ -473,48 +511,23 @@ public class MainHook implements IXposedHookLoadPackage {
             if (!interesting) {
                 return;
             }
-            if (sentSec != null) {
+            if (original != null) {
                 // A long-press in swipe-only mode: behave as if unmodified.
-                String back = Mapping.origOf(sentSec, CN_MODE);
-                if (back != null && !back.isEmpty()) {
-                    p.args[0] = back;
-                    XposedBridge.log(TAG + "sentinel -> " + back);
-                }
+                p.args[0] = original;
+                XposedBridge.log(TAG + "sentinel -> " + original);
+                return;
             }
             String rep = origMap().get(t);
             if (rep != null && !rep.equals(t)) {
-                // Comma/period have no long-press, so they always apply; letters only on the
-                // gesture path, and only if that gesture is enabled. Either way the Sogou symbol
-                // panel must be left alone — otherwise typing the original symbol from it would
-                // come out as the custom one.
-                boolean punct = punctSet().contains(t);
-                if (!isSymbolPanelPath(st) && (punct || (slideUp && swipeEnabled()))) {
+                // Symbol-list selections share BaseInputLogic's submission methods with keys.
+                // Require the keyboard gesture entry, not merely a matching submitted symbol.
+                if (slideUp && swipeEnabled()) {
                     p.args[0] = rep;
                     XposedBridge.log(TAG + "replace " + t + " -> " + rep);
                 }
             }
         } catch (Throwable ignored) {
         }
-    }
-
-    /**
-     * True when the current commit came from the Sogou symbol panel (symbols list) rather than
-     * from the keyboard keys. Both end up in {@code BaseInputLogic#C}, but the panel's stack runs
-     * through {@code PinyinInputLogic#p0} / the symbol-page message handler, while a key or a
-     * swipe runs through {@code PinyinInputLogic#x0} (gesture) or {@code b54#L0} (punctuation key).
-     */
-    private static boolean isSymbolPanelPath(StackTraceElement[] st) {
-        for (StackTraceElement e : st) {
-            String cn = e.getClassName();
-            String mn = e.getMethodName();
-            if (cn.endsWith("PinyinInputLogic") && "p0".equals(mn)) {
-                return true;
-            }
-            if (cn.endsWith("inputsession.h3") && "handleMessage".equals(mn)) {
-                return true;
-            }
-        }
-        return false;
     }
 
     /**
@@ -538,26 +551,31 @@ public class MainHook implements IXposedHookLoadPackage {
     /**
      * True when the current commit came from the gesture path rather than plain typing.
      *
-     * Chinese routes long-press and swipe-up through `BaseInputLogic#z0` (v12) / `#D0` (v20);
-     * English (the Typany engine) routes both through `com.typany.shell.Interface#handleSecondaryInput`. Neither
-     * separates long-press from swipe, which is fine: in "both" mode a long-press commits the
-     * custom symbol already, so only the swipe-up can commit a key's original symbol.
+     * Chinese key gestures enter PinyinInputLogic#x0 (v12) / #B0 (v20). Require that entry
+     * together with the secondary submission method: BaseInputLogic#z0 / #D0 alone also
+     * accepts symbol-panel selections (#p0 in v12, #J0/#t0 in v20). English key gestures use
+     * Interface#handleSecondaryInput, while symbol selections use Interface#handleInput.
+     * Long-press shares the gesture route; swipe-only long-press sentinels are restored first.
      */
     private static boolean isSlideUp(StackTraceElement[] st) {
+        boolean keyboardGesture = false;
+        boolean secondaryCommit = false;
         for (StackTraceElement e : st) {
             String cn = e.getClassName();
             String mn = e.getMethodName();
-            // v12 routes long-press and swipe through BaseInputLogic#z0; v20 renamed that same gate
-            // to BaseInputLogic#D0 (observed stack: commitText <- BaseInputLogic#D <- #D0).
+            if (cn.endsWith("PinyinInputLogic")
+                    && (VER == 2 ? "B0".equals(mn) : "x0".equals(mn))) {
+                keyboardGesture = true;
+            }
             if (cn.endsWith("BaseInputLogic")
                     && (VER == 2 ? "D0".equals(mn) : "z0".equals(mn))) {
-                return true;
+                secondaryCommit = true;
             }
             if (cn.endsWith("typany.shell.Interface") && "handleSecondaryInput".equals(mn)) {
                 return true;
             }
         }
-        return false;
+        return keyboardGesture && secondaryCommit;
     }
 
     /** Skip Xposed dispatch/reflection frames and return the first few real callers. */
@@ -701,6 +719,105 @@ public class MainHook implements IXposedHookLoadPackage {
     }
 
     // ------------------------------------------------------------------ v20 family
+
+    /** Popup label getters also feed input processing; substitute only inside canvas drawing. */
+    private void hookPopupDraw(ClassLoader cl) {
+        try {
+            XposedHelpers.findAndHookMethod("com.sogou.bu.keyboard.popup.KeyboardPopupView", cl,
+                    "onDraw", android.graphics.Canvas.class,
+                    new XC_MethodHook() {
+                        @Override
+                        protected void beforeHookedMethod(MethodHookParam p) {
+                            if (!"swipe".equals(MODE)) {
+                                return;
+                            }
+                            java.util.List<Object[]> restore = new java.util.ArrayList<Object[]>();
+                            p.setObjectExtra("sogousym.drawRestore", restore);
+                            try {
+                                replacePopupField(p.thisObject, "c", restore);
+                                Object layout = XposedHelpers.getObjectField(p.thisObject, "o");
+                                if (layout != null) {
+                                    replacePopupField(layout, "j", restore);
+                                    Object labels = XposedHelpers.getObjectField(layout, "t");
+                                    if (labels != null) {
+                                        replacePopupField(labels, "a", restore);
+                                    }
+                                }
+                            } catch (Throwable t) {
+                                ilog("popup draw substitution unavailable: " + t);
+                            }
+                        }
+
+                        @Override
+                        protected void afterHookedMethod(MethodHookParam p) {
+                            java.util.List<Object[]> restore = (java.util.List<Object[]>)
+                                    p.getObjectExtra("sogousym.drawRestore");
+                            if (restore == null) {
+                                return;
+                            }
+                            // Xposed calls this even when onDraw throws, so input always sees the
+                            // original popup data after the synchronous UI drawing call finishes.
+                            for (int i = restore.size() - 1; i >= 0; i--) {
+                                Object[] entry = restore.get(i);
+                                try {
+                                    XposedHelpers.setObjectField(entry[0], (String) entry[1], entry[2]);
+                                } catch (Throwable t) {
+                                    ilog("popup draw restore failed: " + t);
+                                }
+                            }
+                        }
+                    });
+            ilog("hooked popup draw (v20)");
+        } catch (Throwable t) {
+            XposedBridge.log(TAG + "hook popup draw failed: " + t);
+        }
+    }
+
+    private static String popupDisplay(String value) {
+        StringBuilder out = null;
+        for (int i = 0; i < value.length(); i++) {
+            String original = SENT2ORIGINAL.get(value.substring(i, i + 1));
+            if (original != null) {
+                if (out == null) {
+                    out = new StringBuilder(value.substring(0, i));
+                }
+                out.append(original);
+            } else if (out != null) {
+                out.append(value.charAt(i));
+            }
+        }
+        return out == null ? value : out.toString();
+    }
+
+    private static void replacePopupField(Object owner, String field, java.util.List<Object[]> restore) {
+        Object value = XposedHelpers.getObjectField(owner, field);
+        Object display = value;
+        if (value instanceof String) {
+            display = popupDisplay((String) value);
+        } else if (value instanceof java.util.List) {
+            java.util.List<?> labels = (java.util.List<?>) value;
+            java.util.List<Object> copy = null;
+            for (int i = 0; i < labels.size(); i++) {
+                Object label = labels.get(i);
+                if (label instanceof String) {
+                    String shown = popupDisplay((String) label);
+                    if (shown != label) {
+                        if (copy == null) {
+                            copy = new java.util.ArrayList<Object>(labels);
+                        }
+                        copy.set(i, shown);
+                    }
+                }
+            }
+            if (copy != null) {
+                display = copy;
+            }
+        }
+        if (display != value) {
+            restore.add(new Object[]{owner, field, value});
+            XposedHelpers.setObjectField(owner, field, display);
+        }
+    }
 
     /**
      * com.sogou.theme.parse.parseimpl.a#B(key, keyName, attr, value, view) - the attribute setter.

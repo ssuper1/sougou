@@ -2,6 +2,17 @@
 
 > 最后更新：2026-10-05（下午补：新增搜狗 v20.17.0 兼容 + 卡死根因结论）
 
+## 2026-10-06 修复记录
+
+本节覆盖下文关于符号列表误替换、仅上划长按显示无字形的旧结论。
+
+- 实机复现中文 S 配置 `！→+` 时，符号列表选择 `！` 也变成 `+`。v20 的列表和上划都会经过 `BaseInputLogic.D0`，因此该方法不能单独作为按键手势的依据；列表栈没有包含 `symbol` 的类名，原先的排除判断未生效。
+- v20 上划实测路径：`PinyinInputLogic.B0 → BaseInputLogic.I0 → D0 → D → commitText`；符号列表路径：`PinyinInputLogic.t0 → J0 → BaseInputLogic.I0 → D0 → D → commitText`。
+- `isSlideUp` 现在要求中文栈同时包含按键手势入口和次级提交方法：v20 为 `PinyinInputLogic.B0` + `BaseInputLogic.D0`，v12 为 `PinyinInputLogic.x0` + `BaseInputLogic.z0`。英文保留 `Interface.handleSecondaryInput` 判断；实测英文符号选择走 `Interface.handleInput`。
+- 仅上划模式的长按哨兵按键位及中英模式分别分配，提交时直接还原原符号。v20 气泡仅在 `KeyboardPopupView.onDraw` 内临时替换显示字段，绘制后恢复，避免修改长按提交缓存。
+- 当前连接设备（搜狗 v20）已安装调试 APK 并完成实际输入验证：仅上划、仅长按、都生效三种模式，中文页及常用页选择 `！` 均输出 U+FF01；仅上划常用页连续选择三次通过，返回键盘上划仍输出 `+`，长按气泡显示并提交 `！`。
+- 构建 `:app:assembleDebug` 通过；临时 `SOURCE` 栈日志已移除。测试结束恢复原配置 `#mode=swipe`，保留中文 S 与英文逗号的用户配置。v12 当前没有设备回归。
+
 ## 一句话
 给手机搜狗输入法（`com.sohu.inputmethod.sogou`）的 26 键加一个 LSPosed 模块：**App 内像键盘一样给每个键填自定义符号，长按该键即输入它**，并在角标上同时显示原符号（方便对照）。**同时支持旧版 v12.0 和新版 v20.17.0（按运行时探测自动选 hook 集）**。
 
