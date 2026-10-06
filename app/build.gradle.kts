@@ -16,6 +16,7 @@ android {
         targetSdk = 36
         versionCode = 96
         versionName = "0.86"
+        testInstrumentationRunner = "com.qoder.sogousym.LifecycleInstrumentation"
     }
 
     buildTypes {
@@ -38,4 +39,6 @@ android {
 
 dependencies {
     compileOnly("de.robv.android.xposed:api:82")
+    testImplementation(libs.junit)
+    testImplementation("de.robv.android.xposed:api:82")
 }

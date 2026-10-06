@@ -66,6 +66,9 @@ public class MainActivity extends Activity {
     private TextView rootStatus;
     private EditText testBox;
     private View hintBar;
+    private Runnable imeRetry;
+    private boolean activityResumed;
+    private boolean restartInProgress;
 
     /** Which gesture the custom symbol applies to: "both" | "longpress" | "swipe". */
     private String mode = "both";
@@ -109,7 +112,7 @@ public class MainActivity extends Activity {
         }
 
         hintBar = hintBar();
-        if (Prefs.isHintSeen(this)) {
+        if (Prefs.isHintSeen(this) || !hasLegacyPunctuationDisplay()) {
             hintBar.setVisibility(View.GONE);
         }
         content.addView(hintBar);
@@ -156,6 +159,25 @@ public class MainActivity extends Activity {
         sv.requestApplyInsets();
 
         checkRoot();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        activityResumed = true;
+    }
+
+    @Override
+    protected void onPause() {
+        activityResumed = false;
+        cancelImeRetry();
+        super.onPause();
+    }
+
+    @Override
+    protected void onDestroy() {
+        cancelImeRetry();
+        super.onDestroy();
     }
 
     // ------------------------------------------------------------------------ top bar
@@ -302,7 +324,7 @@ public class MainActivity extends Activity {
         bar.setLayoutParams(blp);
 
         TextView msg = new TextView(this);
-        msg.setText("仅上划有显示异常bug。逗号和句号无法更改为设置的符号");
+        msg.setText("搜狗 v12 的逗号、句号键面暂保留原符号。");
         msg.setTextSize(11);
         msg.setTextColor(c(R.color.blue_text));
         msg.setLineSpacing(dp(2), 1f);
@@ -388,12 +410,23 @@ public class MainActivity extends Activity {
         card.addView(board);
 
         TextView warn = new TextView(this);
-        warn.setText("逗号/句号按键面仍显示「，」「。」，但按下去输出你设的符号。");
+        warn.setText("搜狗 v12 的逗号、句号键面暂保留原符号。");
         warn.setTextSize(10);
         warn.setTextColor(c(R.color.text_tertiary));
         warn.setPadding(0, dp(6), 0, 0);
-        card.addView(warn);
+        if (hasLegacyPunctuationDisplay()) {
+            card.addView(warn);
+        }
         return card;
+    }
+
+    private boolean hasLegacyPunctuationDisplay() {
+        try {
+            String version = getPackageManager().getPackageInfo(SOGOU, 0).versionName;
+            return version != null && version.startsWith("12.");
+        } catch (android.content.pm.PackageManager.NameNotFoundException ignored) {
+            return false;
+        }
     }
 
     private View modeCard() {
@@ -876,6 +909,11 @@ public class MainActivity extends Activity {
     }
 
     private void doRestart() {
+        if (restartInProgress) {
+            return;
+        }
+        restartInProgress = true;
+        cancelImeRetry();
         persist();   // restarting saves first, so the keyboard picks up the edits
         toast("已保存，正在请求重启…");
         new Thread(new Runnable() {
@@ -885,9 +923,13 @@ public class MainActivity extends Activity {
                 runOnUiThread(new Runnable() {
                     @Override
                     public void run() {
+                        restartInProgress = false;
+                        if (isFinishing() || isDestroyed()) {
+                            return;
+                        }
                         boolean ok = "0".equals(r[0]);
                         toast(ok ? "已重启，正在唤起键盘…" : "重启失败：" + r[1]);
-                        if (ok) {
+                        if (ok && activityResumed) {
                             showImeSoon();
                         }
                     }
@@ -898,29 +940,48 @@ public class MainActivity extends Activity {
 
     /** Bring the keyboard back up on the test box after Sogou was restarted. */
     private void showImeSoon() {
-        if (testBox == null) {
+        cancelImeRetry();
+        if (testBox == null || !activityResumed) {
             return;
         }
         testBox.requestFocusFromTouch();
-        final Runnable[] holder = new Runnable[1];
-        holder[0] = new Runnable() {
+        imeRetry = new Runnable() {
             int tries = 0;
 
             @Override
             public void run() {
-                if (testBox == null || tries++ > 14) {
+                if (testBox == null || !activityResumed || isFinishing() || isDestroyed()
+                        || !testBox.hasFocus() || isImeVisible() || tries++ >= 15) {
+                    cancelImeRetry();
                     return;
                 }
-                testBox.requestFocusFromTouch();
                 InputMethodManager imm =
                         (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
                 if (imm != null) {
                     imm.showSoftInput(testBox, 0);
                 }
-                testBox.postDelayed(holder[0], 600);
+                testBox.postDelayed(this, 600);
             }
         };
-        testBox.postDelayed(holder[0], 500);
+        testBox.postDelayed(imeRetry, 500);
+    }
+
+    private void cancelImeRetry() {
+        if (testBox != null && imeRetry != null) {
+            testBox.removeCallbacks(imeRetry);
+        }
+        imeRetry = null;
+    }
+
+    private boolean isImeVisible() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            WindowInsets insets = testBox.getRootWindowInsets();
+            return insets != null && insets.isVisible(WindowInsets.Type.ime());
+        }
+        android.graphics.Rect visible = new android.graphics.Rect();
+        View root = testBox.getRootView();
+        root.getWindowVisibleDisplayFrame(visible);
+        return root.getHeight() - visible.bottom > dp(150);
     }
 
     private void confirmReset() {
@@ -970,6 +1031,9 @@ public class MainActivity extends Activity {
                 runOnUiThread(new Runnable() {
                     @Override
                     public void run() {
+                        if (isFinishing() || isDestroyed()) {
+                            return;
+                        }
                         rootStatus.setText(ok ? "已授权" : "未授权");
                         rootStatus.setTextColor(c(ok ? R.color.ok : R.color.danger));
                     }
@@ -1009,11 +1073,14 @@ public class MainActivity extends Activity {
 
     /** Run a command and return {exitCode, mergedOutput}. Kills it after 8s. */
     private static String[] execCapture(String... cmd) {
+        Process process = null;
+        Thread killer = null;
         try {
             ProcessBuilder pb = new ProcessBuilder(cmd);
             pb.redirectErrorStream(true);
             final Process p = pb.start();
-            Thread killer = new Thread(new Runnable() {
+            process = p;
+            killer = new Thread(new Runnable() {
                 @Override
                 public void run() {
                     try {
@@ -1027,15 +1094,23 @@ public class MainActivity extends Activity {
             killer.start();
 
             StringBuilder out = new StringBuilder();
-            BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()));
-            String line;
-            while ((line = r.readLine()) != null) {
-                out.append(line).append('\n');
+            try (BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()))) {
+                String line;
+                while ((line = r.readLine()) != null) {
+                    out.append(line).append('\n');
+                }
             }
             int code = p.waitFor();
             return new String[]{String.valueOf(code), out.toString().trim()};
         } catch (Throwable t) {
             return new String[]{"-1", t.toString()};
+        } finally {
+            if (killer != null) {
+                killer.interrupt();
+            }
+            if (process != null) {
+                process.destroy();
+            }
         }
     }
 
