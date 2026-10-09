@@ -4,11 +4,14 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.DialogInterface;
 import android.content.Intent;
+import android.content.res.ColorStateList;
 import android.graphics.Typeface;
 import android.content.pm.ActivityInfo;
 import android.content.res.Configuration;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.RippleDrawable;
+import android.graphics.drawable.StateListDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -21,6 +24,7 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewOutlineProvider;
+import android.view.Window;
 import android.view.WindowInsets;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
@@ -28,6 +32,7 @@ import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
+import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -82,6 +87,11 @@ public class MainActivity extends Activity {
 
     /** "大键" layout: roomier key cells with clear row separation. */
     private boolean bigKey;
+    private boolean undoPaste;
+    private String undoKey = "X";
+    private TextView undoKeyDisplay;
+    private static final List<String> UNDO_LETTERS = undoLetters();
+    private Switch pasteSwitch;
     private int keyFieldH;
     private int keyPadV;
     private int keyRowPad;
@@ -105,6 +115,11 @@ public class MainActivity extends Activity {
 
         Map<String, String> current = Prefs.load(this);
         bigKey = "1".equals(current.get("#bigKey"));
+        undoPaste = "1".equals(current.get("#undoPaste"));
+        String saved = current.get("#undoKey");
+        if (saved != null && UNDO_LETTERS.contains(saved)) {
+            undoKey = saved;
+        }
         applyKeyMetrics();
         String m = current.get("#mode");
         if (m != null && !m.isEmpty()) {
@@ -119,6 +134,47 @@ public class MainActivity extends Activity {
         content.addView(testCard());
         content.addView(keyboardCard(current));
         content.addView(modeCard());
+        LinearLayout pasteRow = rowCard();
+        pasteSwitch = new Switch(this);
+        pasteSwitch.setText("撤销粘贴");
+        pasteSwitch.setTextSize(13);
+        pasteSwitch.setTextColor(c(R.color.text_primary));
+        pasteSwitch.setChecked(undoPaste);
+        pasteSwitch.setEnabled(!hasLegacyPunctuationDisplay());
+        pasteSwitch.setOnCheckedChangeListener((button, checked) -> {
+            undoPaste = checked;
+            refreshUndoKeys();
+        });
+
+        LinearLayout pasteLine = row();
+        pasteLine.addView(pasteSwitch, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+        undoKeyDisplay = new TextView(this);
+        undoKeyDisplay.setText(undoKey);
+        undoKeyDisplay.setTextSize(15);
+        undoKeyDisplay.setTextColor(c(R.color.blue_text));
+        undoKeyDisplay.setTypeface(Typeface.DEFAULT_BOLD);
+        undoKeyDisplay.setPadding(dp(8), dp(4), dp(8), dp(4));
+        GradientDrawable keyBg = new GradientDrawable();
+        keyBg.setColor(c(R.color.blue_light));
+        keyBg.setCornerRadius(dp(6));
+        undoKeyDisplay.setBackground(keyBg);
+        pasteLine.addView(undoKeyDisplay);
+
+        Button pickBtn = new Button(this);
+        pickBtn.setText("选择");
+        pickBtn.setTextSize(13);
+        pickBtn.setTextColor(c(R.color.text_primary));
+        pickBtn.setBackground(dr(R.drawable.bg_btn_soft));
+        pickBtn.setPadding(dp(12), dp(6), dp(12), dp(6));
+        pickBtn.setOnClickListener(v -> showUndoKeyPicker());
+        LinearLayout.LayoutParams pickLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        pickLp.setMargins(dp(8), 0, 0, 0);
+        pasteLine.addView(pickBtn, pickLp);
+
+        pasteRow.addView(pasteLine, matchLp());
+        content.addView(pasteRow);
         content.addView(actionCard());
         if (!BuildConfig.NON_ROOT) {
             content.addView(rootCard());
@@ -842,8 +898,12 @@ public class MainActivity extends Activity {
             return;
         }
         boolean any = false;
+        boolean action = undoPaste && k.letter.equals(undoKey);
         for (int i = 0; i < kv.fields.size(); i++) {
-            boolean on = hasText(kv.fields.get(i));
+            EditText field = kv.fields.get(i);
+            field.setEnabled(!action);
+            field.setHint(action ? MainHook.UNDO_LABEL : i == 0 ? k.pyOrig : k.enOrig);
+            boolean on = action || hasText(field);
             any |= on;
             TextView lab = i < kv.labels.size() ? kv.labels.get(i) : null;
             if (lab != null) {
@@ -936,6 +996,8 @@ public class MainActivity extends Activity {
         }
         values.put("#mode", mode);
         values.put("#bigKey", bigKey ? "1" : "0");
+        values.put("#undoPaste", undoPaste ? "1" : "0");
+        values.put("#undoKey", undoKey);
         Prefs.save(this, values);
     }
 
@@ -1052,12 +1114,134 @@ public class MainActivity extends Activity {
 
     /** Clears every custom symbol back to the Sogou defaults; the caller decides how to apply it. */
     private void reset() {
+        undoPaste = false;
+        pasteSwitch.setChecked(false);
+        undoKey = "X";
+        if (undoKeyDisplay != null) {
+            undoKeyDisplay.setText(undoKey);
+        }
         for (EditText et : fields.values()) {
             et.setText("");
         }
         Prefs.clear(this);
         mode = "both";
         updateModeButtons();
+    }
+
+    private static List<String> undoLetters() {
+        List<String> letters = new ArrayList<String>();
+        for (Mapping.Key k : Mapping.KEYS) {
+            if (k.row != 4) {
+                letters.add(k.letter);
+            }
+        }
+        return letters;
+    }
+
+    private void showUndoKeyPicker() {
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+
+        final String[] selected = {undoKey};
+        List<TextView> keys = new ArrayList<>();
+        boolean landscape = getResources().getConfiguration().orientation
+                == Configuration.ORIENTATION_LANDSCAPE;
+
+        for (int rowNum = 1; rowNum <= 3; rowNum++) {
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER);
+            List<Mapping.Key> rowKeys = Mapping.row(rowNum);
+            float sideWeight = (10 - rowKeys.size()) / 2f;
+            int sidePadding = dp((10 - rowKeys.size()) * 2);
+            row.setPadding(sidePadding, 0, sidePadding, 0);
+            if (sideWeight > 0) {
+                row.addView(spacer(), new LinearLayout.LayoutParams(0, 1, sideWeight));
+            }
+
+            for (final Mapping.Key k : rowKeys) {
+                TextView keyView = new TextView(this);
+                keyView.setText(k.letter);
+                keyView.setTextSize(18);
+                keyView.setGravity(Gravity.CENTER);
+                keyView.setSingleLine(true);
+                keyView.setMinHeight(dp(landscape ? 40 : 48));
+                int verticalPadding = dp(landscape ? 8 : 12);
+                keyView.setPadding(0, verticalPadding, 0, verticalPadding);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    keyView.setAutoSizeTextTypeUniformWithConfiguration(
+                            8, 18, 1, android.util.TypedValue.COMPLEX_UNIT_SP);
+                }
+                keyView.setTypeface(Typeface.DEFAULT_BOLD);
+                keyView.setTextColor(new ColorStateList(
+                        new int[][]{new int[]{android.R.attr.state_selected}, new int[]{}},
+                        new int[]{c(R.color.blue_text), c(R.color.text_primary)}));
+                GradientDrawable active = new GradientDrawable();
+                active.setColor(c(R.color.blue_light));
+                active.setCornerRadius(dp(6));
+                active.setStroke(dp(1), c(R.color.accent));
+                GradientDrawable idle = new GradientDrawable();
+                idle.setColor(c(R.color.seg_bg));
+                idle.setCornerRadius(dp(6));
+                StateListDrawable background = new StateListDrawable();
+                background.addState(new int[]{android.R.attr.state_selected}, active);
+                background.addState(new int[]{}, idle);
+                keyView.setBackground(new RippleDrawable(
+                        ColorStateList.valueOf(c(R.color.blue_mid)), background, null));
+                keyView.setSelected(k.letter.equals(selected[0]));
+                keyView.setFocusable(true);
+                keys.add(keyView);
+
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+                int verticalMargin = dp(landscape ? 3 : 4);
+                lp.setMargins(dp(2), verticalMargin, dp(2), verticalMargin);
+
+                keyView.setOnClickListener(v -> {
+                    selected[0] = k.letter;
+                    for (TextView key : keys) {
+                        key.setSelected(key.getText().toString().equals(selected[0]));
+                    }
+                });
+
+                row.addView(keyView, lp);
+            }
+            if (sideWeight > 0) {
+                row.addView(spacer(), new LinearLayout.LayoutParams(0, 1, sideWeight));
+            }
+            content.addView(row, matchLp());
+        }
+
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(content);
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("选择撤销键")
+                .setNegativeButton("取消", null)
+                .setNeutralButton("仅保存", (d, which) -> {
+                    undoKey = selected[0];
+                    undoKeyDisplay.setText(undoKey);
+                })
+                .setPositiveButton("立即生效", (d, which) -> {
+                    undoKey = selected[0];
+                    undoKeyDisplay.setText(undoKey);
+                    refreshUndoKeys();
+                    doRestart();
+                })
+                .create();
+        dialog.setView(scroll, dp(12), dp(12), dp(12), dp(8));
+
+        dialog.show();
+        Window window = dialog.getWindow();
+        if (window != null) {
+            int availableWidth = getWindow().getDecorView().getWidth();
+            window.setLayout(Math.min(dp(560), availableWidth - dp(32)),
+                    ViewGroup.LayoutParams.WRAP_CONTENT);
+        }
+    }
+
+    private void refreshUndoKeys() {
+        for (Mapping.Key key : Mapping.KEYS) {
+            refreshKeyStyle(key);
+        }
     }
 
     // ------------------------------------------------------------------- root check

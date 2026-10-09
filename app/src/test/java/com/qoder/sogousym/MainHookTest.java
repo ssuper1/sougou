@@ -117,6 +117,64 @@ public class MainHookTest {
     }
 
     @Test
+    public void pasteUndoOnlyConsumesXGesturesAllowedByTheSelectedMode() {
+        for (String mode : Arrays.asList("both", "swipe", "longpress")) {
+            MainHook.MODE = mode;
+            boolean swipe = !"longpress".equals(mode);
+            boolean longPress = !"swipe".equals(mode);
+            assertEquals(swipe, MainHook.isUndoPasteTrigger("\uFF09", () -> chineseGesture(2)));
+            assertEquals(swipe, MainHook.isUndoPasteTrigger(")", () -> english(true)));
+            assertEquals(longPress, MainHook.isUndoPasteTrigger(MainHook.UNDO_PASTE, () -> chineseGesture(2)));
+            assertFalse(MainHook.isUndoPasteTrigger("\uFF09", () -> chinesePanel(2)));
+            assertFalse(MainHook.isUndoPasteTrigger(")", () -> english(false)));
+            assertFalse(MainHook.isUndoPasteTrigger(MainHook.UNDO_PASTE, () -> english(false)));
+            assertFalse(MainHook.isUndoPasteTrigger("x", NO_STACK));
+            assertFalse(MainHook.isUndoPasteTrigger("normal typing", NO_STACK));
+        }
+        assertEquals(MainHook.UNDO_LABEL, MainHook.popupDisplay(MainHook.UNDO_PASTE));
+    }
+
+    @Test
+    public void undoCornersShowTheOriginalSymbolForEveryLetterAndInputMode() {
+        for (Mapping.Key key : Mapping.KEYS) {
+            if (key.row == 4) {
+                continue;
+            }
+            MainHook.CN_MODE = true;
+            assertEquals(MainHook.UNDO_LABEL + " " + key.pyOrig,
+                    MainHook.cornerDisplay(key.pySection, MainHook.UNDO_PASTE));
+            MainHook.CN_MODE = false;
+            assertEquals(MainHook.UNDO_LABEL + " " + key.enOrig,
+                    MainHook.cornerDisplay(key.enSection, MainHook.UNDO_PASTE));
+        }
+        assertEquals("+ !", MainHook.cornerDisplay("Key_S_EN", "+"));
+        assertEquals(MainHook.UNDO_LABEL, MainHook.popupDisplay(MainHook.UNDO_PASTE));
+    }
+
+    @Test
+    public void pasteUndoCanUseAnyLetterKeyAsItsTrigger() {
+        Map<String, String> saved = MainHook.MAP;
+        Map<String, String> config = new LinkedHashMap<>(saved);
+        config.put("#undoPaste", "1");
+        config.put("#undoKey", "Z");
+        try {
+            MainHook.MAP = config;
+            MainHook.buildOrigIndex();
+            MainHook.buildSentinels();
+            MainHook.MODE = "both";
+            assertEquals(MainHook.UNDO_PASTE, MainHook.customOf("Key_Z"));
+            assertEquals(null, MainHook.customOf("Key_X"));
+            assertTrue(MainHook.isUndoPasteTrigger(MainHook.UNDO_PASTE, () -> chineseGesture(2)));
+            assertTrue(MainHook.isUndoPasteTrigger("（", () -> chineseGesture(2)));
+            assertFalse(MainHook.isUndoPasteTrigger("）", () -> chineseGesture(2)));
+        } finally {
+            MainHook.MAP = saved;
+            MainHook.buildOrigIndex();
+            MainHook.buildSentinels();
+        }
+    }
+
+    @Test
     public void longPressOnlyDoesNotRewriteOriginalsOrCaptureStack() {
         MainHook.MODE = "longpress";
         for (String text : Arrays.asList("\uFF01", "!", "-", "+")) {

@@ -103,6 +103,8 @@ public class MainHook implements IXposedHookLoadPackage, IXposedHookZygoteInit {
     static volatile Map<String, String> SENT2ORIGINAL = Collections.emptyMap();
     static volatile String[] SENT_ORIGINALS = new String[0];
     private static final int SENT_BASE = 0xE000;
+    static final String UNDO_PASTE = "\uE034";
+    static final String UNDO_LABEL = "\u21B6";
     private static final Map<String, String> POPUP_DISPLAYS = new LinkedHashMap<String, String>();
     private static final Supplier<StackTraceElement[]> COMMIT_STACK =
             () -> new Throwable().getStackTrace();
@@ -113,6 +115,9 @@ public class MainHook implements IXposedHookLoadPackage, IXposedHookZygoteInit {
      * the value under the bare section name still work through the fallback.
      */
     static String customOf(String section) {
+        if (PasteUndoHook.isUndoSection(section)) {
+            return UNDO_PASTE;
+        }
         String v = MAP.get(Mapping.configKeyOf(section, CN_MODE));
         return v != null ? v : MAP.get(section);
     }
@@ -213,6 +218,9 @@ public class MainHook implements IXposedHookLoadPackage, IXposedHookZygoteInit {
         Set<String> punctPy = new HashSet<String>();
         Set<String> punctEn = new HashSet<String>();
         for (Mapping.Key k : Mapping.KEYS) {
+            if (PasteUndoHook.isUndoKey(k)) {
+                continue;
+            }
             boolean lp = Mapping.hasLongPress(k);
             String cp = MAP.get(k.pyKey());
             if (cp != null && !cp.isEmpty() && k.pyOrig != null && !k.pyOrig.isEmpty()) {
@@ -255,6 +263,7 @@ public class MainHook implements IXposedHookLoadPackage, IXposedHookZygoteInit {
             }
         }
         SENT2ORIGINAL = originals;
+        orderedOriginals.add(UNDO_LABEL);
         synchronized (POPUP_DISPLAYS) {
             SENT_ORIGINALS = orderedOriginals.toArray(new String[0]);
             POPUP_DISPLAYS.clear();
@@ -262,13 +271,18 @@ public class MainHook implements IXposedHookLoadPackage, IXposedHookZygoteInit {
         SENT_BY_CONFIG_KEY = bySec;
     }
 
+    static String cornerDisplay(String section, String sym) {
+        String label = UNDO_PASTE.equals(sym) ? UNDO_LABEL : sym;
+        String orig = Mapping.origOf(section, CN_MODE);
+        return (orig == null || orig.isEmpty()) ? label : label + " " + orig;
+    }
+
     /** Letter corners show "custom + original"; punctuation is handled as a primary label. */
     static void setSymbol(Object key, String section, String sym) {
         if (!Mapping.hasLongPress(section)) {
             return;
         }
-        String orig = Mapping.origOf(section, CN_MODE);
-        String display = (orig == null || orig.isEmpty()) ? sym : (sym + " " + orig);
+        String display = cornerDisplay(section, sym);
         if (VER == 2) {
             // v20: R2(CharSequence) is the minor-label setter (was O2(String) in v12).
             call(key, "R2", display);
@@ -341,6 +355,11 @@ public class MainHook implements IXposedHookLoadPackage, IXposedHookZygoteInit {
             }
         }
         refreshMapAsync();
+        try {
+            PasteUndoHook.installFramework();
+        } catch (Throwable t) {
+            XposedBridge.log(TAG + "paste undo lifecycle hook failed: " + t);
+        }
         installAll(lp.classLoader);
         // The global ClassLoader.loadClass hook only exists to discover v12's hotfix
         // DelegateLastClassLoader. On v20 the real classes are on the app loader, so installing it
@@ -571,6 +590,11 @@ public class MainHook implements IXposedHookLoadPackage, IXposedHookZygoteInit {
         XposedBridge.log(TAG + "installAll ver=" + ver + " on " + cl.getClass().getName()
                 + "@" + Integer.toHexString(id));
         if (ver == 2) {
+            try {
+                PasteUndoHook.install(cl);
+            } catch (Throwable t) {
+                XposedBridge.log(TAG + "paste undo hook failed: " + t);
+            }
             hookAttrNew(cl);
             hookPopupNew(cl);
             hookPopupDraw(cl, true);
@@ -602,7 +626,26 @@ public class MainHook implements IXposedHookLoadPackage, IXposedHookZygoteInit {
             Set<XC_MethodHook.Unhook> hooks = XposedBridge.hookAllMethods(c, "commitText", new XC_MethodHook() {
                 @Override
                 protected void beforeHookedMethod(MethodHookParam p) {
+                    if (PasteUndoHook.isRestoring()) {
+                        return;
+                    }
+                    if (p.args.length > 0 && p.args[0] instanceof CharSequence) {
+                        String text = p.args[0].toString();
+                        if (PasteUndoHook.enabled() && isUndoPasteTrigger(text, COMMIT_STACK)) {
+                            p.setResult(true);
+                            PasteUndoHook.undo(p.thisObject);
+                            return;
+                        }
+                        PasteUndoHook.beforeCommit((CharSequence) p.args[0]);
+                    }
                     substituteCommit(p);
+                }
+
+                @Override
+                protected void afterHookedMethod(MethodHookParam p) {
+                    if (!PasteUndoHook.isRestoring()) {
+                        PasteUndoHook.afterCommit(!p.hasThrowable() && Boolean.TRUE.equals(p.getResult()));
+                    }
                 }
             });
             if (hooks.isEmpty()) {
@@ -610,6 +653,11 @@ public class MainHook implements IXposedHookLoadPackage, IXposedHookZygoteInit {
             }
             synchronized (COMMIT_HOOKED) {
                 COMMIT_HOOKED.add(c);
+            }
+            try {
+                PasteUndoHook.installEdits(c);
+            } catch (Throwable t) {
+                XposedBridge.log(TAG + "paste undo edit hooks failed: " + t);
             }
             ilog("hooked commitText (lazy) on " + c.getName());
             return true;
@@ -703,6 +751,13 @@ public class MainHook implements IXposedHookLoadPackage, IXposedHookZygoteInit {
             }
         }
         return t;
+    }
+
+    static boolean isUndoPasteTrigger(String text, Supplier<StackTraceElement[]> stack) {
+        if (UNDO_PASTE.equals(text)) {
+            return longPressEnabled() && isSlideUp(stack.get());
+        }
+        return swipeEnabled() && PasteUndoHook.isUndoOriginal(text) && isSlideUp(stack.get());
     }
 
     private static boolean isDirectPunctuation(StackTraceElement[] stack) {

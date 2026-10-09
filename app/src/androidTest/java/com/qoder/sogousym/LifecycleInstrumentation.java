@@ -49,6 +49,9 @@ public class LifecycleInstrumentation extends Instrumentation {
             }
             Map<String, String> testing = new LinkedHashMap<>(original);
             testing.put("#mode", arguments.getString("mode", testing.getOrDefault("#mode", "both")));
+            if ("true".equals(arguments.getString("pasteUndo"))) {
+                testing.put("#undoPaste", "1");
+            }
             Prefs.save(getTargetContext(), testing);
             if ("true".equals(arguments.getString("configOnly"))) {
                 return;
@@ -59,6 +62,10 @@ public class LifecycleInstrumentation extends Instrumentation {
             activity = (MainActivity) startActivitySync(intent);
             waitForIdleSync();
             Map<String, String> expected = new LinkedHashMap<>(testing);
+            if ("true".equals(arguments.getString("pasteUndo"))) {
+                testPasteUndo();
+                return;
+            }
             if ("true".equals(arguments.getString("recovery"))) {
                 test("rootRecoveryRestoresImeAndDisablesHelper", () -> {
                     String originalIme = android.provider.Settings.Secure.getString(
@@ -330,6 +337,116 @@ public class LifecycleInstrumentation extends Instrumentation {
     private interface Action { void run() throws Exception; }
     private interface Condition { boolean get() throws Exception; }
 
+    private void testPasteUndo() throws Exception {
+        android.widget.EditText box = firstEditText(activity.getWindow().getDecorView());
+        android.content.ClipboardManager clipboard = (android.content.ClipboardManager)
+                activity.getSystemService(android.content.Context.CLIPBOARD_SERVICE);
+        AtomicReference<android.content.ClipData> originalClip = new AtomicReference<>();
+        onUi(() -> {
+            box.requestFocusFromTouch();
+            originalClip.set(clipboard.getPrimaryClip());
+            android.widget.Button restart = buttonWithText(activity.getWindow().getDecorView(), "重启搜狗生效");
+            check(restart != null && restart.performClick(), "Restart button missing");
+        });
+        await(() -> box.getRootWindowInsets() != null && box.getRootWindowInsets().isVisible(
+                android.view.WindowInsets.Type.ime()), 15000);
+        SystemClock.sleep(1800);
+        if ("true".equals(arguments.getString("startEnglish"))) {
+            tap(835, 2260);
+            SystemClock.sleep(350);
+        }
+        try {
+            for (String scenario : new String[]{"append", "middle", "replacement", "cursor", "typing", "repeat",
+                    "list", "english", "englishTyping"}) {
+                String only = arguments.getString("pasteScenario");
+                if (only != null && !only.equals(scenario)) {
+                    continue;
+                }
+                test("pasteUndo_" + scenario, () -> {
+                    boolean english = scenario.startsWith("english");
+                    if (english) {
+                        onUi(() -> box.setText(""));
+                        SystemClock.sleep(350);
+                        tap(835, 2260);
+                        SystemClock.sleep(350);
+                    }
+                    String originalText = english ? "prefix  suffix" : "prefixOLDsuffix";
+                    String pasted = "PASTE_UNDO_TEST";
+                    int start = "append".equals(scenario) ? originalText.length() : english ? 7 : 6;
+                    int end = "replacement".equals(scenario) ? 9 : start;
+                    onUi(() -> {
+                        box.setText(originalText);
+                        box.setSelection(start, end);
+                        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("paste undo test", pasted));
+                    });
+                    SystemClock.sleep(1400);
+                    shell("screencap -p /sdcard/sogousym-paste-before.png");
+                    int candidateX = Integer.parseInt(arguments.getString("pasteX", "400"));
+                    int candidateY = Integer.parseInt(arguments.getString("pasteY", "1625"));
+                    if ("list".equals(scenario)) {
+                        tap(50, candidateY);
+                        SystemClock.sleep(500);
+                        shell("screencap -p /sdcard/sogousym-paste-list.png");
+                        check(tapVisibleText(pasted), "Clipboard test entry is not accessible");
+                        SystemClock.sleep(350);
+                        tap(80, 1610);
+                    } else {
+                        tap(candidateX, candidateY);
+                    }
+                    String after = originalText.substring(0, start) + pasted + originalText.substring(end);
+                    await(() -> after.contentEquals(box.getText()), 4000);
+                    SystemClock.sleep(350);
+                    if ("cursor".equals(scenario)) {
+                        onUi(() -> box.setSelection(0));
+                        SystemClock.sleep(200);
+                        onUi(() -> box.setSelection(start + pasted.length()));
+                        SystemClock.sleep(200);
+                    } else if ("typing".equals(scenario)) {
+                        tap(220, 1945);
+                        SystemClock.sleep(350);
+                        shell("screencap -p /sdcard/sogousym-paste-typing.png");
+                        tap(1010, 2100);
+                        SystemClock.sleep(350);
+                    } else if ("englishTyping".equals(scenario)) {
+                        tap(220, 1945);
+                        await(() -> !after.contentEquals(box.getText()), 3000);
+                    }
+                    AtomicReference<String> beforeUndo = new AtomicReference<>();
+                    onUi(() -> beforeUndo.set(box.getText().toString()));
+                    shell("input swipe 350 2100 350 2100 650");
+                    boolean invalidated = "cursor".equals(scenario) || "typing".equals(scenario)
+                            || "englishTyping".equals(scenario);
+                    await(() -> (invalidated ? beforeUndo.get() : originalText).contentEquals(box.getText()), 4000);
+                    if (!invalidated) {
+                        onUi(() -> check(box.getSelectionStart() == start && box.getSelectionEnd() == end,
+                                "Selection was not restored"));
+                    }
+                    if ("repeat".equals(scenario)) {
+                        shell("input swipe 350 2100 350 2100 650");
+                        SystemClock.sleep(300);
+                        onUi(() -> check(originalText.contentEquals(box.getText()), "Repeated undo deleted text"));
+                    }
+                    if (english) {
+                        tap(835, 2260);
+                        SystemClock.sleep(350);
+                    }
+                });
+                if (failures > 0) {
+                    shell("screencap -p /sdcard/sogousym-paste-failed.png");
+                    break;
+                }
+            }
+        } finally {
+            onUi(() -> {
+                if (originalClip.get() != null) {
+                    clipboard.setPrimaryClip(originalClip.get());
+                } else if (android.os.Build.VERSION.SDK_INT >= 28) {
+                    clipboard.clearPrimaryClip();
+                }
+            });
+        }
+    }
+
     private android.widget.EditText firstEditText(View view) {
         if (view instanceof android.widget.EditText) {
             return (android.widget.EditText) view;
@@ -379,6 +496,27 @@ public class LifecycleInstrumentation extends Instrumentation {
         }
     }
 
+    private boolean tapVisibleText(String text) {
+        android.accessibilityservice.AccessibilityServiceInfo info = getUiAutomation().getServiceInfo();
+        info.flags |= android.accessibilityservice.AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS;
+        getUiAutomation().setServiceInfo(info);
+        for (android.view.accessibility.AccessibilityWindowInfo window : getUiAutomation().getWindows()) {
+            android.view.accessibility.AccessibilityNodeInfo root = window.getRoot();
+            if (root == null) {
+                continue;
+            }
+            for (android.view.accessibility.AccessibilityNodeInfo node : root.findAccessibilityNodeInfosByText(text)) {
+                if (text.contentEquals(node.getText()) && node.isVisibleToUser()) {
+                    android.graphics.Rect bounds = new android.graphics.Rect();
+                    node.getBoundsInScreen(bounds);
+                    tap(bounds.centerX(), bounds.centerY());
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     private void touch(long down, int action, int x, int y) {
         android.view.MotionEvent event = android.view.MotionEvent.obtain(
                 down, SystemClock.uptimeMillis(), action, x, y, 0);
@@ -395,7 +533,8 @@ public class LifecycleInstrumentation extends Instrumentation {
         status.putString("class", getClass().getName());
         status.putString("test", name);
         status.putInt("numtests", "true".equals(arguments.getString("releaseSmoke"))
-                || "true".equals(arguments.getString("recovery")) ? 1 : 5);
+                || "true".equals(arguments.getString("recovery")) ? 1
+                : "true".equals(arguments.getString("pasteUndo")) ? 9 : 5);
         status.putInt("current", ++current);
         sendStatus(1, status);
         try {
